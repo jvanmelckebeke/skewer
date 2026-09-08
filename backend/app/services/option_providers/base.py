@@ -12,7 +12,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import date, datetime
 
-from app.domain.occ import ContractRef
+from app.domain.contracts import ContractRef
+from app.domain.venue import Venue
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,8 +34,25 @@ class RawOptionQuote:
     volume: int
     open_interest: int | None
     iv_provider: float | None
-    contract_size: str
+    contract_size: int
     currency: str
+
+    # The exchange's own official mark, where the venue publishes one.
+    #
+    # This exists because Eurex's free feed has no order book at all: it
+    # publishes one settlement price per contract per session and nothing
+    # else. That is emphatically *not* the same thing as Yahoo's zero bid.
+    # A zero bid is the absence of a quote, and the invariant that it must
+    # never become a mark is what keeps the IV surface clean. A settlement
+    # price is the opposite: it is the exchange's considered valuation,
+    # struck against the closing auction, and it is the most authoritative
+    # number of the day.
+    #
+    # So a settlement is allowed to become a mark when there is no two-sided
+    # quote to prefer, and ``chain_sync`` does exactly that. It stays a
+    # separate field rather than being written into ``bid``/``ask`` so that
+    # nothing downstream can mistake it for a book that was never there.
+    settlement: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +69,7 @@ class RawChain:
     symbol: str
     name: str
     currency: str
+    venue: Venue
     spot: float | None
     bid: float | None
     ask: float | None
@@ -66,7 +85,22 @@ class RawChain:
 
 
 class OptionProvider(ABC):
-    """Source of option chains."""
+    """Source of option chains.
+
+    Implementations are selected per *underlying* rather than per process.
+    Skewer polls Yahoo for US names and Eurex for German ones in the same
+    collection cycle, so "which provider" is a property of the row being
+    polled — see ``option_providers.for_venue``.
+    """
+
+    #: The market this provider speaks for. Used to route an underlying to it.
+    venue: Venue
+
+    #: Whether this provider reports a live order book. False means the feed
+    #: is end-of-day settlement only, which changes what a poll can produce:
+    #: there is no intraday shape to sample, so the cadence grid has nothing
+    #: to select between and one session yields one row per contract.
+    intraday: bool = True
 
     @abstractmethod
     async def fetch_chain(self, symbol: str) -> RawChain:

@@ -109,7 +109,15 @@ class QuoteRepository:
         """
         stmt = (
             select(
-                OptionContract.id, OptionContract.occ_symbol,
+                OptionContract.id, OptionContract.symbol,
+                # The contract's terms travel with the quote because the
+                # caller rebuilds a ContractRef per row. They used to be
+                # re-parsed out of the OCC symbol, which is not possible for a
+                # Eurex ISIN — it encodes nothing.
+                OptionContract.venue, OptionContract.expiration,
+                OptionContract.strike, OptionContract.right,
+                OptionContract.exercise_style, OptionContract.contract_size,
+                OptionContract.currency,
                 OptionQuote.bid, OptionQuote.ask, OptionQuote.mark, OptionQuote.last,
                 OptionQuote.last_trade_at, OptionQuote.volume, OptionQuote.spot,
                 OptionQuote.iv, OptionQuote.iv_provider, OptionQuote.iv_status,
@@ -255,7 +263,7 @@ class QuoteRepository:
 
         result = await self.db.execute(
             select(
-                OptionContract.occ_symbol,
+                OptionContract.symbol,
                 OptionContract.strike,
                 OptionContract.right,
                 func.count().label("samples"),
@@ -275,7 +283,7 @@ class QuoteRepository:
                 OptionContract.expiration == expiration,
                 local_date == session_date,
             )
-            .group_by(OptionContract.id, OptionContract.occ_symbol,
+            .group_by(OptionContract.id, OptionContract.symbol,
                       OptionContract.strike, OptionContract.right)
             .order_by(OptionContract.strike, OptionContract.right)
         )

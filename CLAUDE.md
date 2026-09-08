@@ -42,9 +42,11 @@ docker compose -f docker-compose.yaml -f docker-compose.dev.yml up frontend
 ## Commands
 
 ```bash
-docker compose exec backend pytest
-docker compose exec backend pytest tests/test_pricing.py -k iv
-docker compose exec backend ruff check app/
+# The image installs requirements.txt only, so pytest/ruff are not in it.
+# Once per container: pip install -r requirements-dev.txt
+docker compose exec backend python -m pytest
+docker compose exec backend python -m pytest tests/test_pricing.py -k iv
+docker compose exec backend python -m ruff check app/
 
 # Collection-path tests need PostgreSQL (ON CONFLICT upserts; SQLite can't):
 SKEWER_TEST_DATABASE_URL=postgresql+asyncpg://skewer:skewer@db:5432/skewer_test pytest
@@ -85,19 +87,30 @@ would write the same integer ~78 times a session.
 
 ### Backend layout
 
-- `domain/occ.py` — **the only place OCC symbols are parsed or built.** `ContractRef`
-  is the contract identity (frozen, like fibenchi's `AssetRef`, and for the same
-  reason: it survives the rollbacks a batch loop performs, where an ORM instance
-  would expire and raise `MissingGreenlet`). Parsing also *validates* — provider
-  strike/expiry are cross-checked against the symbol at ingest.
+- `domain/contracts.py` — `ContractRef`, the venue-agnostic contract identity
+  (frozen, like fibenchi's `AssetRef`, and for the same reason: it survives the
+  rollbacks a batch loop performs, where an ORM instance would expire and raise
+  `MissingGreenlet`). Re-exported from `domain/occ.py`, so the old import path
+  still works.
+- `domain/venue.py` — `Venue`, `ExerciseStyle`, and the per-venue facts that used
+  to be hardcoded US constants: the expiry instant, the session window, the
+  currency. Adding a market means an entry here plus a symbology.
+- `domain/occ.py` — **the only place OCC symbols are parsed or built.** Parsing
+  also *validates*: provider strike/expiry are cross-checked against the symbol
+  at ingest. **No other venue gives this for free** — a Eurex ISIN encodes
+  nothing, so its terms are believed rather than checked.
+- `domain/eurex.py` — Eurex identity. Contracts are keyed `EUX:` + ISIN; the
+  prefix is what makes the two namespaces provably non-colliding in the one
+  unique index they share.
 - `domain/cadence.py` — the capture policy. Tenor buckets, wall-clock slot
   alignment, `should_persist`. Change cadence here and nowhere else.
 - `models/` — SQLAlchemy declarative with `Mapped[]`.
 - `repositories/` — all DB access. Upserts are chunked (`UPSERT_CHUNK_ROWS`)
   against PostgreSQL's 32767 bind-parameter ceiling; a full chain is ~3.3k rows
   and SPY's is several times that.
-- `services/option_providers/` — `OptionProvider` ABC + Yahoo impl, registry-
-  resolved. **The seam for a non-US source.**
+- `services/option_providers/` — `OptionProvider` ABC, Yahoo (OCC) and Eurex
+  impls, resolved **per underlying by venue**, not by a global setting. NVDA and
+  BMW.DE are polled in the same cycle from different feeds.
 - `services/chain_sync.py` — fetch → register contracts → cadence-select →
   solve IV → persist. `persist_chain()` is split from `sync_underlying()` so the
   pipeline is testable without a network.
@@ -190,8 +203,13 @@ service function and a schema — the router stays thin.
 `@background_task(...)`. Own your session, swallow your own exceptions.
 
 **A data provider:** implement `OptionProvider` in `services/option_providers/`,
-register it in that package's `_PROVIDERS`, select via `OPTION_PROVIDER`.
-Normalise "no quote" to `None` in the provider — that's the layer's job.
+give it a `venue` and an `intraday` flag, and register it in that package's
+`_PROVIDERS`. Routing is by `underlyings.venue`, so nothing above the registry
+changes. Normalise "no quote" to `None` in the provider — that's the layer's job.
+
+**A venue:** add a `VenueSpec` to `domain/venue.py` (expiry instant, session,
+currency), a symbology module alongside `domain/occ.py`, a provider, and a value
+to the `option_venue` enum via a migration.
 
 ## Frontend
 
@@ -243,6 +261,51 @@ back the lists that populate their pickers, so the client needs one round trip.
   nonsense — so moneyness is the filter, not liquidity.
 - PostgreSQL-only: ordered-set aggregates and `timezone()`. The tests skip
   without `SKEWER_TEST_DATABASE_URL`, same as the collection ones.
+
+## Eurex (the second venue)
+
+Deutsche Boerse's public GraphQL API at
+`https://api.developer.deutsche-boerse.com/eurex-prod-graphql/graphql` (note the
+trailing `/graphql`; Eurex's own docs give a URL that 404s) serves contract
+terms, `ExerciseStyle`, `VersionNr` and daily `SettlementPrices`, free and
+anonymous. It is CORS-open, so Apollo Sandbox works against it directly.
+
+- **There is no order book.** No bid, no ask, no intraday anything. `bid`/`ask`
+  are NULL because the field does not exist, not because the book was empty.
+  `intraday = False` makes every Eurex poll a full one, since cadence selection
+  has nothing to choose between.
+- **A settlement price is allowed to become a mark.** This does not weaken the
+  zero-bid rule, it is its mirror image: Yahoo's 0.0 is the *absence* of a
+  quote, while a settlement is the exchange's own valuation struck against the
+  closing auction.
+- **Spot must come from the settlement's session, not from now.** Eurex settles
+  yesterday; pricing that against a live spot pushed 252 of BMW's 952 contracts
+  below their own no-arbitrage bound, and silently skewed every one that did
+  solve. `YahooOptionProvider.fetch_close` exists for this. Yahoo also supplies
+  the spot itself, since Eurex publishes none — the two feeds compose.
+- **The dividend yield is not optional here.** On BMW (7.0% yield) solving with
+  `q=0` costs 58 contracts: 750 solve vs 808.
+- **Filter quirks.** `Contracts` requires an `eq` filter on `Product` unless you
+  paginate; a range filter (`ge`) cannot be combined with `page` at all; date
+  variables are `Date!`, not `String!`; operators are lowercase (`eq`, not `EQ`).
+
+Measured on BMW's 2026-09-07 session: 952 contracts, 808 solved (85%), median
+IV 37.5%.
+
+### Known gaps
+
+- **BSM prices American options.** Both venues list American-style equity
+  options and skewer prices them European. That predates Eurex — US listed
+  options are American too — but Eurex makes it visible by publishing
+  `ExerciseStyle` per contract. The field is stored and dispatched on nowhere.
+- **`VersionNr` is ignored.** A corporate action adjusts a Eurex contract's
+  terms and issues a new ISIN, so the adjusted contract arrives as a new row
+  rather than as a version of the old one. The dimension table's immutability
+  assumption does not hold on this venue.
+- **No open interest.** It is a fee-based Eurex file, so `option_daily_stats`
+  gets NULL rather than a number for European names.
+- **The API field is still called `occ_symbol`.** It now carries Eurex keys too.
+  Renaming it is a frontend change as well as a backend one.
 
 ## Known bug: the catalogue job writes quotes off-session
 

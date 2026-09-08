@@ -22,10 +22,13 @@ async def list_underlyings(db: AsyncSession = Depends(get_db)):
 async def add_underlying(data: UnderlyingCreate, db: AsyncSession = Depends(get_db)):
     """Validate the ticker has a listed option chain, then start collecting it.
 
-    Rejects with 422 when the provider has no chain — which is every European
-    listing, since Yahoo publishes options for US tickers only.
+    The venue is auto-detected when not given: Yahoo (US listings) is tried
+    first, then Eurex. Rejects with 422 only when no venue has a chain.
     """
-    return await underlying_service.add_underlying(db, data.symbol, data.group_id)
+    return await underlying_service.add_underlying(
+        db, data.symbol, data.group_id,
+        venue=data.venue, venue_product=data.venue_product,
+    )
 
 
 @router.get("/{symbol}", response_model=UnderlyingResponse, summary="Get one underlying")

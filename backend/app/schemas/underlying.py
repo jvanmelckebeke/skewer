@@ -2,10 +2,27 @@ from datetime import date, datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.domain.venue import Venue
+
 
 class UnderlyingCreate(BaseModel):
-    symbol: str = Field(..., description="Ticker to start collecting option chains for (US listings only).")
+    symbol: str = Field(..., description="Ticker to start collecting option chains for.")
     group_id: int | None = Field(None, description="Group to add it to; the default group when omitted.")
+    venue: Venue | None = Field(
+        None,
+        description=(
+            "Which market's options to collect. Omit to auto-detect: OCC (Yahoo, "
+            "US listings) is tried first, then Eurex."
+        ),
+    )
+    venue_product: str | None = Field(
+        None,
+        description=(
+            "The venue's own option product code, when it differs from the ticker. "
+            "Eurex lists BMW.DE's options under the product 'BMW'. Only needed when "
+            "stripping the exchange suffix does not give the right code."
+        ),
+    )
 
 
 class UnderlyingUpdate(BaseModel):
@@ -23,6 +40,8 @@ class UnderlyingResponse(BaseModel):
     symbol: str
     name: str
     currency: str
+    venue: Venue
+    venue_product: str | None
     dividend_yield: float
     dividend_yield_is_manual: bool
     is_active: bool

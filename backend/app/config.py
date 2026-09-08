@@ -18,7 +18,25 @@ class Settings(BaseSettings):
     # structure (^IRX/^FVX) when that stops being true.
     risk_free_rate: float = 0.04
 
+    # The provider used for underlyings that do not say otherwise. Kept for
+    # backwards compatibility and as the default stamped on a newly added
+    # underlying; it is no longer a global switch, because skewer now polls
+    # Yahoo and Eurex in the same cycle. Routing lives on
+    # ``underlyings.venue`` — see services/option_providers/__init__.py.
     option_provider: str = "yahoo"
+
+    # --- Eurex (Deutsche Boerse public reference-data API) ----------------
+    # The published shared key is anonymous and rate limited. It is fine for a
+    # handful of European names on a five-minute grid; register a dedicated
+    # key at console.developer.deutsche-boerse.com if that stops being true.
+    # Note the trailing /graphql: Eurex's own documentation gives the URL
+    # without it, and that path 404s.
+    eurex_graphql_url: str = (
+        "https://api.developer.deutsche-boerse.com/eurex-prod-graphql/graphql"
+    )
+    eurex_api_key: str = "68cdafd2-c5c1-49be-8558-37244ab4f513"
+    eurex_timeout_seconds: float = 30.0
+
     log_level: str = "INFO"
 
     model_config = {"env_prefix": ""}

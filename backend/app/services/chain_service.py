@@ -51,8 +51,15 @@ async def load_snapshot(
     oi_map = await repo.latest_open_interest(underlying.id)
 
     refs, bid, ask, iv, volume, oi, spots = [], [], [], [], [], [], []
-    for cid, occ, b, a, _mark, _last, _lta, vol, spot, iv_v, _ivp, _st in rows:
-        refs.append(ContractRef.parse(occ, id=cid))
+    for (cid, sym, venue, expiration, strike, right, exercise_style,
+         contract_size, currency,
+         b, a, _mark, _last, _lta, vol, spot, iv_v, _ivp, _st) in rows:
+        refs.append(ContractRef(
+            symbol=sym, venue=venue, root=sym.split(":")[-1],
+            expiration=expiration, right=right, strike=float(strike),
+            exercise_style=exercise_style, contract_size=int(contract_size),
+            currency=currency, id=cid,
+        ))
         bid.append(np.nan if b is None else float(b))
         ask.append(np.nan if a is None else float(a))
         iv.append(np.nan if iv_v is None else float(iv_v))
@@ -98,7 +105,8 @@ def to_contract_quotes(snap: ChainSnapshot, rows: list[tuple], on: date) -> list
 
     out = []
     for i, ref in enumerate(snap.refs):
-        _cid, _occ, b, a, mark, last, last_trade_at, vol, _spot, _iv, ivp, status = rows[i]
+        (_cid, _sym, _venue, _exp, _strike, _right, _style, _size, _ccy,
+         b, a, mark, last, last_trade_at, vol, _spot, _iv, ivp, status) = rows[i]
         out.append({
             "occ_symbol": ref.occ_symbol,
             "expiration": ref.expiration,
@@ -160,29 +168,58 @@ async def term_view(db: AsyncSession, symbol: str, at: datetime | None = None) -
 
 
 async def contract_series(
-    db: AsyncSession, occ_symbol: str, days: int = 5
+    db: AsyncSession, symbol: str, days: int = 5
 ) -> dict:
-    """One contract's stored quote history."""
+    """One contract's stored quote history.
+
+    Looks the contract up by its stored symbol rather than by parsing it. The
+    previous version called ``ContractRef.parse``, which is OCC-only and so
+    404'd every Eurex contract before it ever reached the database — the terms
+    are read back from the row instead, which works for both venues.
+    """
     from sqlalchemy import select
 
     from app.models import OptionContract
 
-    ref = ContractRef.parse(occ_symbol)
+    key = symbol.strip()
     result = await db.execute(
-        select(OptionContract.id).where(OptionContract.occ_symbol == ref.occ_symbol)
+        select(
+            OptionContract.id,
+            OptionContract.symbol,
+            OptionContract.expiration,
+            OptionContract.strike,
+            OptionContract.right,
+        ).where(OptionContract.symbol == key)
     )
-    cid = result.scalars().first()
-    if cid is None:
-        raise HTTPException(404, f"Contract {ref.occ_symbol} is not tracked")
+    row = result.first()
+    if row is None:
+        # Tolerate an un-normalised OCC symbol (lowercase, whitespace), which
+        # is how the old parse-first path forgave sloppy input.
+        result = await db.execute(
+            select(
+                OptionContract.id,
+                OptionContract.symbol,
+                OptionContract.expiration,
+                OptionContract.strike,
+                OptionContract.right,
+            ).where(OptionContract.symbol == key.upper())
+        )
+        row = result.first()
+    if row is None:
+        raise HTTPException(404, f"Contract {key} is not tracked")
+    cid, stored_symbol, expiration, strike, right = row
 
     end = datetime.now(tz=timezone.utc)
     start = end - timedelta(days=days)
     rows = await QuoteRepository(db).series_for_contract(cid, start, end)
     return {
-        "occ_symbol": ref.occ_symbol,
-        "expiration": ref.expiration,
-        "strike": ref.strike,
-        "right": ref.right.value,
+        # Wire name kept as occ_symbol for frontend compatibility even though
+        # it now carries Eurex keys too. Renaming it is a frontend change as
+        # well as a backend one, so it is deliberately not bundled here.
+        "occ_symbol": stored_symbol,
+        "expiration": expiration,
+        "strike": float(strike),
+        "right": right.value,
         "points": [
             {"ts": ts, "mark": _f(mark), "bid": _f(b), "ask": _f(a),
              "iv": _f(iv), "spot": _f(spot), "volume": int(vol or 0)}

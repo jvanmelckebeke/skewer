@@ -8,13 +8,14 @@ from datetime import datetime, timezone
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domain.venue import Venue, spec_for
 from app.models import Underlying
 from app.repositories.contract_repo import ContractRepository
 from app.repositories.group_repo import GroupRepository
 from app.repositories.quote_repo import QuoteRepository
 from app.repositories.underlying_repo import UnderlyingRepository
 from app.services.market_calendar import is_market_open, local_now
-from app.services.option_providers import get_option_provider
+from app.services.option_providers import for_venue
 
 logger = logging.getLogger(__name__)
 
@@ -23,14 +24,26 @@ async def list_underlyings(db: AsyncSession) -> list[Underlying]:
     return await UnderlyingRepository(db).list_all()
 
 
-async def add_underlying(db: AsyncSession, symbol: str, group_id: int | None = None) -> Underlying:
-    """Validate a ticker against the provider, then start tracking it.
+# The order venues are tried in when the caller does not name one. OCC first
+# because it is the larger universe and the cheaper check; Eurex second.
+_DETECT_ORDER = (Venue.OCC, Venue.EUREX)
 
-    Validation is a real fetch rather than a regex. The failure it exists to
-    catch is the one you already identified — Yahoo publishes chains for US
-    listings only — and the difference between rejecting ``ASML.AS`` at add
-    time and accepting it is a tracked underlying that silently collects
-    nothing forever.
+
+async def add_underlying(
+    db: AsyncSession, symbol: str, group_id: int | None = None,
+    venue: Venue | None = None, venue_product: str | None = None,
+) -> Underlying:
+    """Validate a ticker against a provider, then start tracking it.
+
+    Validation is a real fetch rather than a regex, because the failure it
+    exists to catch is a tracked underlying that silently collects nothing
+    forever.
+
+    When ``venue`` is omitted the venues are tried in turn and the first that
+    actually returns a chain wins. That is what makes ``NVDA`` and ``BMW.DE``
+    both work without the user having to know that one is OPRA and the other
+    is Eurex — which is the whole point of routing by venue rather than by a
+    global provider setting.
     """
     symbol = symbol.strip().upper()
     if not symbol:
@@ -41,16 +54,33 @@ async def add_underlying(db: AsyncSession, symbol: str, group_id: int | None = N
     if existing is not None:
         raise HTTPException(409, f"{symbol} is already tracked")
 
-    provider = get_option_provider()
-    ok, name = await provider.validate(symbol)
-    if not ok:
+    candidates = (venue,) if venue is not None else _DETECT_ORDER
+    resolved: Venue | None = None
+    name = ""
+    for candidate in candidates:
+        try:
+            ok, found = await for_venue(candidate).validate(symbol)
+        except Exception:
+            logger.warning("Validation failed for %s on %s", symbol, candidate, exc_info=True)
+            continue
+        if ok:
+            resolved, name = candidate, found
+            break
+
+    if resolved is None:
+        tried = ", ".join(spec_for(v).label for v in candidates)
         raise HTTPException(
             422,
-            f"No option chain available for {symbol}. Yahoo publishes options for US "
-            f"listings only — European and most non-US tickers have no chain.",
+            f"No option chain available for {symbol}. Tried: {tried}. Yahoo covers "
+            f"US listings (OPRA) only; Eurex covers German and other European "
+            f"single-stock options, whose product code may differ from the ticker "
+            f"(pass venue_product if so).",
         )
 
-    underlying = await repo.create(symbol, name)
+    underlying = await repo.create(
+        symbol, name, currency=spec_for(resolved).currency,
+        venue=resolved, venue_product=venue_product,
+    )
 
     group_repo = GroupRepository(db)
     group = await group_repo.get(group_id) if group_id else await group_repo.get_default()

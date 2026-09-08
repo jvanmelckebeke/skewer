@@ -25,12 +25,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.domain.cadence import floor_to_slot, should_persist
+from app.domain.venue import Venue
 from app.repositories.contract_repo import ContractRepository
 from app.repositories.quote_repo import QuoteRepository
 from app.repositories.underlying_repo import UnderlyingRepository
 from app.services.compute.bs import CALL, PUT
 from app.services.compute.iv import IVStatus, implied_vol, mid_price
-from app.services.option_providers import ChainUnavailable, RawChain, get_option_provider
+from app.services.option_providers import ChainUnavailable, RawChain, for_venue
 
 logger = logging.getLogger(__name__)
 
@@ -52,13 +53,24 @@ class SyncResult:
 async def sync_underlying(
     db: AsyncSession, underlying_id: int, symbol: str, dividend_yield: float = 0.0,
     full: bool = False, now: datetime | None = None,
+    venue: Venue = Venue.OCC, venue_product: str | None = None,
 ) -> SyncResult:
-    """Poll one underlying and persist the selected slice of its chain."""
+    """Poll one underlying and persist the selected slice of its chain.
+
+    ``venue`` picks the provider. It is a per-underlying property rather than
+    a global setting because NVDA and BMW.DE are polled in the same cycle from
+    different feeds.
+    """
     now = now or datetime.now(tz=timezone.utc)
-    provider = get_option_provider()
+    provider = for_venue(venue)
 
     try:
-        chain = await provider.fetch_chain(symbol)
+        # Only the venues whose product code differs from the ticker need the
+        # hint, and only their providers accept it.
+        if venue_product and venue is not Venue.OCC:
+            chain = await provider.fetch_chain(symbol, product=venue_product)
+        else:
+            chain = await provider.fetch_chain(symbol)
     except ChainUnavailable:
         return SyncResult(symbol, 0, 0, 0, 0, 0, None, skipped_reason="no_chain")
     except Exception:
@@ -67,6 +79,13 @@ async def sync_underlying(
 
     if not chain.quotes:
         return SyncResult(symbol, 0, 0, 0, 0, 0, None, skipped_reason="empty_chain")
+
+    # A settlement-only feed has no intraday shape to sample: there is exactly
+    # one observation per contract per session, so cadence selection has
+    # nothing to choose between and would drop most of the chain for no
+    # reason. Every poll of such a venue is therefore a full one.
+    if not provider.intraday:
+        full = True
 
     return await persist_chain(db, underlying_id, chain, dividend_yield, full=full, now=now)
 
@@ -110,6 +129,18 @@ async def persist_chain(
     ask = np.array([q.ask if q.ask is not None else np.nan for q in selected])
     mark = mid_price(bid, ask)
 
+    # Fall back to the exchange's official settlement where there is no
+    # two-sided quote to take a mid from. This is *not* a relaxation of the
+    # zero-bid rule — that rule exists because Yahoo's 0.0 means "nobody is
+    # quoting", and a settlement price means the opposite: it is the venue's
+    # considered valuation, struck against the closing auction. Eurex's free
+    # feed publishes nothing but settlements, so without this a European chain
+    # would store no marks and solve no IV at all.
+    settlement = np.array(
+        [q.settlement if q.settlement is not None else np.nan for q in selected]
+    )
+    mark = np.where(np.isfinite(mark), mark, settlement)
+
     if spot is None or spot <= 0:
         # No spot means no pricing basis at all. The quotes are still worth
         # storing — they are the market's prices and are not retroactively
@@ -134,7 +165,7 @@ async def persist_chain(
 
     rows = []
     for i, q in enumerate(selected):
-        cid = ids.get(q.ref.occ_symbol)
+        cid = ids.get(q.ref.symbol)
         if cid is None:
             continue
         rows.append({
@@ -183,7 +214,7 @@ async def _write_daily(
 
     rows = []
     for i, q in enumerate(selected):
-        cid = ids.get(q.ref.occ_symbol)
+        cid = ids.get(q.ref.symbol)
         if cid is None:
             continue
         rows.append({
@@ -213,12 +244,18 @@ async def sync_all(
 
     # Snapshot the scalars while the rows are live: the loop below commits and
     # may roll back, and either expires every ORM instance in the session.
-    targets = [(u.id, u.symbol, float(u.dividend_yield or 0.0)) for u in underlyings]
+    targets = [
+        (u.id, u.symbol, float(u.dividend_yield or 0.0), u.venue, u.venue_product)
+        for u in underlyings
+    ]
 
     results = []
-    for uid, symbol, div in targets:
+    for uid, symbol, div, venue, venue_product in targets:
         try:
-            result = await sync_underlying(db, uid, symbol, div, full=full, now=now)
+            result = await sync_underlying(
+                db, uid, symbol, div, full=full, now=now,
+                venue=venue, venue_product=venue_product,
+            )
         except Exception:
             logger.warning("Chain sync failed for %s; skipping", symbol, exc_info=True)
             await db.rollback()

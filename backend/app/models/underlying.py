@@ -1,9 +1,10 @@
 from datetime import date, datetime
 
-from sqlalchemy import Boolean, Date, DateTime, Numeric, String, func
+from sqlalchemy import Boolean, Date, DateTime, Enum, Numeric, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
+from app.domain.venue import Venue
 
 
 class Underlying(Base):
@@ -21,6 +22,22 @@ class Underlying(Base):
     symbol: Mapped[str] = mapped_column(String(20), unique=True, index=True)
     name: Mapped[str] = mapped_column(String(200), default="")
     currency: Mapped[str] = mapped_column(String(10), default="USD", server_default="USD")
+
+    # Which market's options we collect for this name, and therefore which
+    # provider polls it. This is the switch that replaced the single global
+    # OPTION_PROVIDER setting: skewer now runs Yahoo and Eurex side by side,
+    # so "which provider" is a property of the underlying, not of the process.
+    venue: Mapped[Venue] = mapped_column(
+        Enum(Venue, name="option_venue", values_callable=lambda e: [m.value for m in e]),
+        default=Venue.OCC, server_default=Venue.OCC.value,
+    )
+
+    # The venue's own code for this underlying's option product, when it
+    # differs from the ticker. Eurex calls BMW's option product "BMW" while
+    # the share trades as BMW.DE on Yahoo, and the two are not derivable from
+    # each other in general (Ahold is "AH" on Euronext, "AD.AS" on Yahoo), so
+    # the mapping is stored rather than guessed. NULL means "same as symbol".
+    venue_product: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
     # Continuous dividend yield 'q' in Black-Scholes-Merton. Stored per
     # underlying rather than assumed zero: on a 2% yielder a year out, ignoring

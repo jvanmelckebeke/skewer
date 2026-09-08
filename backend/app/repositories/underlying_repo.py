@@ -3,6 +3,7 @@ from datetime import date, datetime
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domain.venue import Venue
 from app.models import Group, Underlying, group_underlyings
 
 
@@ -39,8 +40,14 @@ class UnderlyingRepository:
     async def get(self, underlying_id: int) -> Underlying | None:
         return await self.db.get(Underlying, underlying_id)
 
-    async def create(self, symbol: str, name: str, currency: str = "USD") -> Underlying:
-        row = Underlying(symbol=symbol.upper(), name=name, currency=currency)
+    async def create(
+        self, symbol: str, name: str, currency: str = "USD",
+        venue: Venue = Venue.OCC, venue_product: str | None = None,
+    ) -> Underlying:
+        row = Underlying(
+            symbol=symbol.upper(), name=name, currency=currency,
+            venue=venue, venue_product=venue_product,
+        )
         self.db.add(row)
         await self.db.commit()
         await self.db.refresh(row)

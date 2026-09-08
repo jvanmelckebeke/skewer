@@ -31,11 +31,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from yahooquery import Ticker
 
-from app.domain.occ import ContractRef, OccParseError
+from app.domain.contracts import ContractRef
+from app.domain.occ import OccParseError
+from app.domain.venue import Venue
 from app.services.option_providers.base import (
     ChainUnavailable,
     OptionProvider,
@@ -83,8 +85,101 @@ def _int(value) -> int:
         return 0
 
 
+# Yahoo's contractSize is a label, not a number. Skewer stores the integer
+# multiplier because that is what every venue agrees on; Eurex has no notion of
+# 'REGULAR'. Anything unrecognised falls back to 100, the standard equity
+# option multiplier on both venues skewer supports.
+_CONTRACT_SIZES = {"REGULAR": 100, "MINI": 10}
+
+
 class YahooOptionProvider(OptionProvider):
-    """Option chains via Yahoo Finance."""
+    """Option chains via Yahoo Finance — US listings only.
+
+    Yahoo serves OPRA, so its option payload covers US-listed contracts and
+    nothing else. Asking it for BMW.DE returns a perfectly good *stock* quote
+    with no options attached, which is why :class:`EurexOptionProvider` exists
+    and why this one is registered against ``Venue.OCC`` alone.
+    """
+
+    venue = Venue.OCC
+    intraday = True
+
+    async def fetch_spot(self, symbol: str) -> dict | None:
+        """The underlying's own quote block, without its option chain.
+
+        Split out because the Eurex provider needs it: Deutsche Boerse's free
+        feed publishes option terms and settlement prices but no underlying
+        spot, and an option surface without a spot has no moneyness axis and
+        therefore no implied volatility. Yahoo does serve European *equity*
+        quotes (BMW.DE comes back in EUR off XETRA), so the two feeds compose:
+        Eurex for the surface, Yahoo for the spot it is measured against.
+        """
+        try:
+            data = await asyncio.to_thread(self._fetch_price, symbol)
+        except Exception:
+            logger.warning("Spot fetch failed for %s", symbol, exc_info=True)
+            return None
+        return data
+
+    async def fetch_close(self, symbol: str, on: date) -> float | None:
+        """The underlying's closing price for a session, or the nearest before it.
+
+        Needed by the Eurex provider, and the reason is a correctness one that
+        bit immediately when it was missing. Eurex publishes *settlement*
+        prices for a session that closed yesterday. Pricing those against
+        today's live spot mixes two different moments, and the error is not
+        cosmetic: on a live BMW chain it pushed 252 of 952 contracts below
+        their own no-arbitrage lower bound, because the stock had moved
+        overnight and deep in-the-money options priced off yesterday's close
+        now looked cheaper than intrinsic. The 631 that still solved were
+        solving against the wrong spot too, just less visibly.
+
+        Falls back to the most recent close at or before ``on`` rather than
+        returning nothing, because the two feeds do not always agree on which
+        days exist — Yahoo had no 2026-09-07 bar for BMW.DE on a session Eurex
+        settled. A close from one session earlier is an approximation and is
+        far better than no pricing basis at all, but it *is* an
+        approximation.
+        """
+        try:
+            close = await asyncio.to_thread(self._fetch_close, symbol, on)
+        except Exception:
+            logger.warning("Close lookup failed for %s on %s", symbol, on, exc_info=True)
+            return None
+        return close
+
+    def _fetch_close(self, symbol: str, on: date) -> float | None:
+        # A 10-day window comfortably spans a long weekend plus a holiday,
+        # which is what it takes to be sure of finding a prior session.
+        start = on - timedelta(days=10)
+        ticker = Ticker([symbol], asynchronous=False, validate=False)
+        frame = ticker.history(start=start.isoformat(), end=(on + timedelta(days=1)).isoformat(),
+                               interval="1d")
+        if not hasattr(frame, "empty") or frame.empty or "close" not in frame:
+            return None
+
+        best: tuple[date, float] | None = None
+        for index, value in frame["close"].items():
+            # The frame is indexed by (symbol, date) for a single ticker too.
+            raw = index[-1] if isinstance(index, tuple) else index
+            day = getattr(raw, "date", lambda: raw)()
+            if not isinstance(day, date) or day > on:
+                continue
+            try:
+                price = float(value)
+            except (TypeError, ValueError):
+                continue
+            if price > 0 and (best is None or day > best[0]):
+                best = (day, price)
+        return None if best is None else best[1]
+
+    def _fetch_price(self, symbol: str) -> dict | None:
+        ticker = Ticker([symbol], asynchronous=False, validate=False)
+        price = ticker.price
+        if not isinstance(price, dict):
+            return None
+        block = price.get(symbol) or price.get(symbol.upper())
+        return block if isinstance(block, dict) else None
 
     async def fetch_chain(self, symbol: str) -> RawChain:
         chains = await self.fetch_chains([symbol])
@@ -168,6 +263,7 @@ class YahooOptionProvider(OptionProvider):
             symbol=symbol,
             name=quote.get("shortName") or quote.get("longName") or symbol,
             currency=quote.get("currency") or "USD",
+            venue=Venue.OCC,
             spot=_num(quote.get("regularMarketPrice")),
             bid=_num(quote.get("bid")),
             ask=_num(quote.get("ask")),
@@ -224,7 +320,9 @@ class YahooOptionProvider(OptionProvider):
             volume=_int(row.get("volume")),
             open_interest=None if oi is None else _int(oi),
             iv_provider=iv,
-            contract_size=row.get("contractSize") or "REGULAR",
+            contract_size=_CONTRACT_SIZES.get(
+                str(row.get("contractSize") or "REGULAR").upper(), 100
+            ),
             currency=row.get("currency") or "USD",
         )
 
