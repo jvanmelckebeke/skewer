@@ -23,6 +23,7 @@ from app.services.option_providers.base import (
     RawOptionQuote,
 )
 from app.services.option_providers.eurex import EurexOptionProvider
+from app.services.option_providers.euronext import EuronextOptionProvider
 from app.services.option_providers.yahoo import YahooOptionProvider
 
 __all__ = [
@@ -38,6 +39,7 @@ _BY_NAME: dict[str, Venue] = {
     "yahoo": Venue.OCC,
     "occ": Venue.OCC,
     "eurex": Venue.EUREX,
+    "euronext": Venue.EURONEXT,
 }
 
 
@@ -62,6 +64,9 @@ def init_option_provider() -> None:
         # quote for spot. The dependency is passed in rather than imported
         # inside the provider so it is visible here, where the wiring lives.
         Venue.EUREX: EurexOptionProvider(spot_source=yahoo),
+        # Euronext prices derivatives and says nothing about the underlying
+        # share, so it borrows the same equity quote Eurex does.
+        Venue.EURONEXT: EuronextOptionProvider(spot_source=yahoo),
     }
 
 

@@ -37,6 +37,27 @@ class Settings(BaseSettings):
     eurex_api_key: str = "68cdafd2-c5c1-49be-8558-37244ab4f513"
     eurex_timeout_seconds: float = 30.0
 
+    # --- Euronext (EWS derivatives web service) ---------------------------
+    # Requires a licensed auth key from Euronext London; there is no anonymous
+    # mode. With the key unset the provider refuses to poll rather than
+    # emitting 401s, and rejects an underlying at add time.
+    euronext_api_url: str = "https://gateway.euronext.com/api/instrumentDetail"
+    euronext_auth_key: str = ""
+    # "RT" real-time or "DT" delayed, per spec section 3.1. Which one a key is
+    # entitled to is a licensing question.
+    euronext_session_quality: str = "DT"
+    euronext_timeout_seconds: float = 20.0
+
+    # This API serves one contract per request and has no chain endpoint, so a
+    # chain is an enumerated grid and these bounds are what stand between a
+    # poll and several thousand requests. The cap is a hard stop, not advice.
+    euronext_concurrency: int = 4
+    euronext_max_requests: int = 600
+    # Strikes within +/- this fraction of spot. 0.30 covers the strikes with
+    # meaningful open interest on a typical equity name.
+    euronext_strike_window_pct: float = 0.30
+    euronext_max_maturities: int = 6
+
     log_level: str = "INFO"
 
     model_config = {"env_prefix": ""}

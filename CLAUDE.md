@@ -99,18 +99,19 @@ would write the same integer ~78 times a session.
   also *validates*: provider strike/expiry are cross-checked against the symbol
   at ingest. **No other venue gives this for free** — a Eurex ISIN encodes
   nothing, so its terms are believed rather than checked.
-- `domain/eurex.py` — Eurex identity. Contracts are keyed `EUX:` + ISIN; the
-  prefix is what makes the two namespaces provably non-colliding in the one
-  unique index they share.
+- `domain/eurex.py` — Eurex identity. Contracts are keyed `EUX:` + ISIN.
+- `domain/euronext.py` — Euronext identity, keyed `XNT:<EXCODE>:<identifier>`.
+  The prefixes are what make the three namespaces provably non-colliding in the
+  one unique index they share.
 - `domain/cadence.py` — the capture policy. Tenor buckets, wall-clock slot
   alignment, `should_persist`. Change cadence here and nowhere else.
 - `models/` — SQLAlchemy declarative with `Mapped[]`.
 - `repositories/` — all DB access. Upserts are chunked (`UPSERT_CHUNK_ROWS`)
   against PostgreSQL's 32767 bind-parameter ceiling; a full chain is ~3.3k rows
   and SPY's is several times that.
-- `services/option_providers/` — `OptionProvider` ABC, Yahoo (OCC) and Eurex
-  impls, resolved **per underlying by venue**, not by a global setting. NVDA and
-  BMW.DE are polled in the same cycle from different feeds.
+- `services/option_providers/` — `OptionProvider` ABC plus Yahoo (OCC), Eurex
+  and Euronext impls, resolved **per underlying by venue**, not by a global
+  setting. NVDA and BMW.DE are polled in the same cycle from different feeds.
 - `services/chain_sync.py` — fetch → register contracts → cadence-select →
   solve IV → persist. `persist_chain()` is split from `sync_underlying()` so the
   pipeline is testable without a network.
@@ -306,6 +307,41 @@ IV 37.5%.
   gets NULL rather than a number for European names.
 - **The API field is still called `occ_symbol`.** It now carries Eurex keys too.
   Renaming it is a frontend change as well as a backend one.
+
+## Euronext (the third venue) — written to spec, never run
+
+`services/option_providers/euronext.py`, built from "EWS API - Derivatives
+Markets - Client Specification" v1.4. **It has never touched the live API.**
+There is no anonymous or sandbox mode, so it needs an `authKey` from Euronext
+London (`EURONEXT_AUTH_KEY`). With the key unset it refuses to poll and rejects
+Euronext underlyings at add time, rather than emitting 401s.
+
+- **One contract per request, and no chain endpoint.** The entire spec exposes
+  `instrumentDetail` and `intraday`, both per-instrument. There is no list and
+  no search. So a chain is an *enumerated grid* — maturities x strikes x rights
+  — and a miss is how you learn a strike is not listed. A full chain is several
+  hundred requests, which is why `EURONEXT_MAX_REQUESTS` is a hard stop and the
+  fetch is semaphore-bounded. This is a licensed commercial gateway.
+- **The strike ladder is guessed.** Euronext publishes strike intervals per
+  contract class and this API cannot be asked for them, so `strike_step_for`
+  brackets by price level. A wrong guess costs wasted requests and a chain with
+  holes, never wrong data — every contract that comes back is real.
+- **The richest feed of the three.** A genuine order book (`bsBidPx`/`bsAskPx`),
+  open interest on both sessions, and a settlement price. No settlement-as-mark
+  fallback is needed, unlike Eurex.
+- **Identity validates itself.** The identifier is `CODE-C|P-YYYYMM-STRIKE`, so
+  the strike is checked against the key the way an OCC symbol is. Eurex cannot
+  do this. But the maturity is only a *month*: the real expiry comes from
+  `instr.exchEndDt` and is never guessed at the third Friday.
+- **The denominators are the one real unknown.** `specFeat[]` carries
+  `instrumentDenominator` and `strikePriceDenominator` and the spec never says
+  in prose that prices are divided by them. If that is backwards, every price
+  is out by 10x or 100x. `domain/euronext.check_strike` is the tripwire: the
+  identifier's strike must survive the scaling or the row is dropped.
+- Not in the add-time venue auto-detect, because probing costs a burst of
+  requests. Euronext underlyings must name `venue` explicitly, and
+  `venue_product` takes a `DBRU:ABI` form since a code can list on several
+  markets.
 
 ## Known bug: the catalogue job writes quotes off-session
 

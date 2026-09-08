@@ -36,6 +36,14 @@ class Venue(str, Enum):
     EUREX = "eurex"
     """Eurex single-stock and index options. Deutsche Boerse's universe."""
 
+    EURONEXT = "euronext"
+    """Euronext derivatives: Amsterdam, Brussels, Paris, Lisbon, Oslo.
+
+    Amsterdam is where the listed option market was invented, and it is still
+    the deep one on this venue. Brussels single-stock volume is thin enough
+    that spreads are wide on everything but ABI and KBC.
+    """
+
 
 class ExerciseStyle(str, Enum):
     """When the holder may exercise.
@@ -121,6 +129,24 @@ VENUES: dict[Venue, VenueSpec] = {
         currency="EUR",
         # Overridden per contract from the feed, which publishes ExerciseStyle
         # directly. This is only the fallback for a row that omits it.
+        default_exercise_style=ExerciseStyle.AMERICAN,
+        default_contract_size=100,
+    ),
+    Venue.EURONEXT: VenueSpec(
+        venue=Venue.EURONEXT,
+        label="Euronext",
+        # Amsterdam, Brussels, Paris and Lisbon all keep Central European
+        # time. Oslo does too, despite not being in the euro.
+        expiry_tz=ZoneInfo("Europe/Amsterdam"),
+        # Euronext equity options stop trading at 17:30 CET; the index options
+        # settle against an opening auction average, which is not modelled.
+        expiry_time=time(17, 30),
+        session_open=time(9, 0),
+        session_close=time(17, 30),
+        # EUR for four of the five markets. Oslo trades in NOK, so this is the
+        # default rather than the truth, and the feed's own `instr.currency`
+        # overrides it per contract.
+        currency="EUR",
         default_exercise_style=ExerciseStyle.AMERICAN,
         default_contract_size=100,
     ),

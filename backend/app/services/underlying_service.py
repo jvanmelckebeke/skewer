@@ -26,6 +26,11 @@ async def list_underlyings(db: AsyncSession) -> list[Underlying]:
 
 # The order venues are tried in when the caller does not name one. OCC first
 # because it is the larger universe and the cheaper check; Eurex second.
+#
+# Euronext is deliberately absent. Its API has no chain endpoint, so even
+# validating a ticker costs a burst of per-contract probes against a licensed
+# gateway — far too expensive to run speculatively on every add. Euronext
+# underlyings must name their venue explicitly.
 _DETECT_ORDER = (Venue.OCC, Venue.EUREX)
 
 
@@ -69,13 +74,26 @@ async def add_underlying(
 
     if resolved is None:
         tried = ", ".join(spec_for(v).label for v in candidates)
-        raise HTTPException(
-            422,
-            f"No option chain available for {symbol}. Tried: {tried}. Yahoo covers "
-            f"US listings (OPRA) only; Eurex covers German and other European "
-            f"single-stock options, whose product code may differ from the ticker "
-            f"(pass venue_product if so).",
+        # A venue that is simply unconfigured is a different problem from one
+        # that has no chain, and saying so saves the user from hunting for a
+        # ticker error that is really a missing key.
+        unconfigured = [
+            spec_for(v).label for v in candidates
+            if getattr(for_venue(v), "configured", True) is False
+        ]
+        detail = f"No option chain available for {symbol}. Tried: {tried}."
+        if unconfigured:
+            detail += (
+                f" Note that {', '.join(unconfigured)} has no credentials configured"
+                f" (set EURONEXT_AUTH_KEY), so it was queried but could not answer."
+            )
+        detail += (
+            " Yahoo covers US listings (OPRA) only; Eurex covers German and other"
+            " European single-stock options; Euronext covers Amsterdam, Brussels,"
+            " Paris, Lisbon and Oslo. The venue's product code may differ from the"
+            " ticker, so pass venue_product (e.g. 'DBRU:ABI') if so."
         )
+        raise HTTPException(422, detail)
 
     underlying = await repo.create(
         symbol, name, currency=spec_for(resolved).currency,
