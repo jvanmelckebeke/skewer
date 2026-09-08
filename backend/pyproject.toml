@@ -1,0 +1,13 @@
+# Lenient to start, matching fibenchi: catch the real footguns (unused imports,
+# undefined names, import order) with near-zero style noise. Broaden `select`
+# over time.
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+extend-exclude = ["alembic/versions"]
+
+[tool.ruff.lint]
+select = ["F", "I"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app", "tests"]

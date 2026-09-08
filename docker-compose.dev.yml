@@ -1,0 +1,15 @@
+# Dev overlay: Vite with HMR instead of the nginx image, still on
+# skewer.desktop.lan and still with no published host port.
+#
+#   docker compose -f docker-compose.yaml -f docker-compose.dev.yml up
+#
+# Vite proxies /api to the backend service, which is what the production nginx
+# does — so the app sees the same single origin either way.
+services:
+  frontend:
+    build:
+      target: build
+    command: sh -c "pnpm install && pnpm dev --host 0.0.0.0 --port 80"
+    volumes:
+      - ./frontend:/build
+      - /build/node_modules

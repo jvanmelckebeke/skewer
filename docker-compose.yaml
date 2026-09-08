@@ -1,0 +1,57 @@
+# Project name pinned so the network and container names stay stable no matter
+# which directory compose is launched from.
+name: skewer
+
+services:
+  db:
+    # TimescaleDB is PostgreSQL with an extension — same wire protocol, same
+    # asyncpg driver, same Alembic migrations. The option-quote fact table is
+    # a hypertable; everything else is ordinary relational tables in the same
+    # database, so contract metadata and ticks stay transactionally consistent.
+    image: timescale/timescaledb:latest-pg16
+    environment:
+      POSTGRES_USER: skewer
+      POSTGRES_PASSWORD: skewer
+      POSTGRES_DB: skewer
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U skewer"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build: ./backend
+    environment:
+      DATABASE_URL: postgresql+asyncpg://skewer:skewer@db:5432/skewer
+      BASE_POLL_MINUTES: ${BASE_POLL_MINUTES:-5}
+      EOD_SNAPSHOT_CRON: ${EOD_SNAPSHOT_CRON:-10 21 * * 1-5}
+      RISK_FREE_RATE: ${RISK_FREE_RATE:-0.04}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    ports:
+      - "18100:8000"
+    volumes:
+      - ./backend:/app
+    depends_on:
+      db:
+        condition: service_healthy
+
+  frontend:
+    # React SPA on nginx, which also proxies /api to the backend on this
+    # network. Same origin for the app and the API means no CORS anywhere and
+    # no base URL to configure in the client.
+    build: ./frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.skewer.entrypoints=web"
+      - "traefik.http.routers.skewer.rule=Host(`skewer.desktop.lan`)"
+      - "traefik.http.services.skewer.loadbalancer.server.port=80"
+
+volumes:
+  pgdata:
