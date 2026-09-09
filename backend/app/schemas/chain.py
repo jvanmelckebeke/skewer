@@ -90,6 +90,13 @@ class ChainSummaryRow(BaseModel):
     currency: str
     is_active: bool
 
+    # Enough to flag a stalled collector without a status request per row.
+    # market_open is the US session gate, the same approximation
+    # UnderlyingStatus already makes: a Eurex name is judged by NYSE hours.
+    market_open: bool
+    minutes_since_poll: float | None
+    is_stale: bool
+
     # Null until the first poll lands. An underlying added a minute ago is a
     # normal row with nothing in it, not an error.
     ts: datetime | None

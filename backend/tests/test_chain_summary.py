@@ -40,6 +40,9 @@ async def test_an_unpolled_underlying_is_a_row_of_nulls(db):
     assert row["symbol"] == "TEST"
     assert row["ts"] is None
     assert row["spot"] is None
+    # Never polled reads as None rather than as a very large number of minutes.
+    assert row["minutes_since_poll"] is None
+    assert isinstance(row["market_open"], bool)
     # Every metric key is present so the client can render fixed columns.
     assert set(row["metrics"]) == set(METRIC_REGISTRY)
     assert all(value is None for value in row["metrics"].values())

@@ -16,6 +16,8 @@ from app.repositories.underlying_repo import UnderlyingRepository
 from app.services.compute.analytics import METRIC_REGISTRY, compute_all, smile, term_structure
 from app.services.compute.bs import per_day, per_point
 from app.services.compute.chain import ChainSnapshot, enrich
+from app.services.market_calendar import is_market_open, minutes_since_open
+from app.services.underlying_service import is_stale, minutes_since_poll
 
 logger = logging.getLogger(__name__)
 
@@ -183,6 +185,11 @@ async def chain_summary(db: AsyncSession, group_id: int | None = None) -> list[d
             raise HTTPException(404, f"No group with id {group_id}")
         underlyings = list(group.underlyings)
 
+    # One calendar call for the whole list rather than one per row: it is the
+    # same answer for every underlying at a single instant.
+    market_open = is_market_open()
+    open_for = minutes_since_open()
+
     rows = []
     for underlying in underlyings:
         row = {
@@ -191,6 +198,12 @@ async def chain_summary(db: AsyncSession, group_id: int | None = None) -> list[d
             "venue": underlying.venue,
             "currency": underlying.currency,
             "is_active": underlying.is_active,
+            # Carried so the overview can tell a paused or stalled ticker from
+            # a healthy one without a status request per row. Both are free
+            # here: last_polled_at is already on the row.
+            "market_open": market_open,
+            "minutes_since_poll": minutes_since_poll(underlying),
+            "is_stale": is_stale(underlying, open_for),
             "ts": None,
             "spot": None,
             "metrics": {mid: None for mid in METRIC_REGISTRY},

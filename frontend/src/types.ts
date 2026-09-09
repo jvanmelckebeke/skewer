@@ -33,6 +33,29 @@ export interface UnderlyingStatus {
   last_eod_snapshot_on: string | null
   minutes_since_poll: number | null
   market_open: boolean
+  is_stale: boolean
+}
+
+/**
+ * One tracked underlying reduced to the numbers a list can show, from
+ * `GET /api/chains/summary`.
+ *
+ * `metrics` is keyed by metric id and always carries every registered id, so a
+ * fixed set of columns can be rendered without checking which keys came back.
+ * A null value means the chain could not answer, never that the answer is zero.
+ */
+export interface ChainSummaryRow {
+  symbol: string
+  name: string
+  venue: Venue
+  currency: string
+  is_active: boolean
+  market_open: boolean
+  minutes_since_poll: number | null
+  is_stale: boolean
+  ts: string | null
+  spot: number | null
+  metrics: Record<string, number | null>
 }
 
 export interface Group {

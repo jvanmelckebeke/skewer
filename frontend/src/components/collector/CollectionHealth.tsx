@@ -44,7 +44,7 @@ export function CollectionHealth() {
   const rows = useMemo(() => {
     const list = (underlyings.data ?? []).map((underlying) => {
       const status = statuses.bySymbol.get(underlying.symbol)
-      return { underlying, status, state: collectionState(underlying, status) }
+      return { underlying, status, state: collectionState(underlying.is_active, status) }
     })
     return list.sort(
       (a, b) =>

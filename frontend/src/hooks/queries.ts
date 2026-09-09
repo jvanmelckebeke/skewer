@@ -11,6 +11,7 @@ import type {
   ChainResponse,
   CollectionStatus,
   ContractSeriesResponse,
+  ChainSummaryRow,
   Group,
   MetricDescriptor,
   SessionProfileResponse,
@@ -25,6 +26,7 @@ export const keys = {
   underlyingStatus: (symbol: string) => ["underlyings", symbol, "status"] as const,
   groups: ["groups"] as const,
   metrics: ["chains", "metrics"] as const,
+  chainSummary: (groupId?: number) => ["chains", "summary", groupId ?? "all"] as const,
   chain: (symbol: string, at?: string) => ["chains", symbol, at ?? "latest"] as const,
   term: (symbol: string, at?: string) => ["chains", symbol, "term", at ?? "latest"] as const,
   contract: (occ: string, days: number) => ["contracts", occ, days] as const,
@@ -81,6 +83,22 @@ export function useUnderlyingStatuses(symbols: string[]) {
 
 export function useGroups() {
   return useQuery({ queryKey: keys.groups, queryFn: () => api.get<Group[]>("/groups") })
+}
+
+/**
+ * Spot and chain metrics for every tracked underlying in one request.
+ *
+ * The overview and each group page render the same table off this. Pulling a
+ * full chain per underlying to compute the same numbers client side is what
+ * this replaces.
+ */
+export function useChainSummary(groupId?: number) {
+  return useQuery({
+    queryKey: keys.chainSummary(groupId),
+    queryFn: () =>
+      api.get<ChainSummaryRow[]>(`/chains/summary${query({ group_id: groupId })}`),
+    refetchInterval: POLL_MS,
+  })
 }
 
 export function useMetricDescriptors() {

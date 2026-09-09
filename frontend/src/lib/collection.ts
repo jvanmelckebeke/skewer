@@ -1,25 +1,29 @@
-import type { Underlying, UnderlyingStatus } from "@/types"
-
 export type CollectionState = "stale" | "collecting" | "paused"
 
 /**
- * Whether an underlying looks like it has stopped being collected.
+ * What a state decision needs, and no more. Both the status endpoint and the
+ * chain summary row carry this field, so either can answer the question and
+ * the overview does not have to make a request per row to ask it.
+ */
+export interface CollectionSignals {
+  is_stale: boolean
+}
+
+/**
+ * How an underlying's collection is doing.
  *
- * The window is 15 minutes against a 5-minute base cadence, so it takes three
- * missed polls to raise it. A shorter window would flag every underlying whose
- * contracts all sit in a slower tenor bucket, which is not a fault.
- *
- * Only meaningful while the market is open. Outside the session nothing is
- * polled, so "no poll for 14 hours" is the collector working correctly.
+ * The staleness rule itself lives in the backend, which is the only layer that
+ * knows when the session opened. Deciding it here would mean re-deriving that
+ * at every call site, and getting it wrong the same way three times: measured
+ * from the last poll alone, every underlying looks stalled for the first
+ * quarter hour of every session.
  */
 export function collectionState(
-  underlying: Pick<Underlying, "is_active">,
-  status: UnderlyingStatus | undefined,
+  isActive: boolean,
+  signals: CollectionSignals | undefined,
 ): CollectionState {
-  if (!underlying.is_active) return "paused"
-  if (!status?.market_open) return "collecting"
-  const minutes = status.minutes_since_poll
-  return minutes === null || minutes > 15 ? "stale" : "collecting"
+  if (!isActive) return "paused"
+  return signals?.is_stale ? "stale" : "collecting"
 }
 
 const ORDER: Record<CollectionState, number> = { stale: 0, collecting: 1, paused: 2 }
