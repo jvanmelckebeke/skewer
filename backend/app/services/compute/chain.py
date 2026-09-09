@@ -16,6 +16,8 @@ import numpy as np
 
 from app.config import settings
 from app.domain.occ import ContractRef, Right
+from app.domain.venue import ExerciseStyle
+from app.services.compute import american as am
 from app.services.compute import bs
 from app.services.compute.iv import IVStatus, implied_vol, mid_price
 
@@ -96,6 +98,9 @@ def enrich(
     strike = np.array([r.strike for r in refs], dtype=float)
     tenor = np.array([r.year_fraction(now) for r in refs], dtype=float)
     is_call = np.array([r.right is Right.CALL for r in refs], dtype=bool)
+    is_american = np.array(
+        [r.exercise_style is ExerciseStyle.AMERICAN for r in refs], dtype=bool
+    )
     phi = np.where(is_call, bs.CALL, bs.PUT)
 
     # Recompute only what was not handed to us. A stored NaN is a real answer
@@ -109,7 +114,9 @@ def enrich(
         mark = np.where(np.isfinite(stored), stored, computed)
 
     if stored_iv is None:
-        res = implied_vol(mark, spot, strike, tenor, rate, dividend_yield, phi)
+        res = implied_vol(
+            mark, spot, strike, tenor, rate, dividend_yield, phi, american=is_american
+        )
         iv, status = res.iv, res.status
     else:
         iv = np.asarray(stored_iv, dtype=float)
@@ -124,11 +131,23 @@ def enrich(
     live = np.isfinite(iv)
     blank = lambda arr: np.where(live, arr, np.nan)  # noqa: E731
 
+    # The model price uses the right exercise style; the greeks do not.
+    #
+    # That split is deliberate rather than an oversight. Both prices are one
+    # array op, so pricing correctly costs nothing. American greeks have no
+    # closed form under Bjerksund-Stensland and would have to be finite
+    # differenced, which is ten more price evaluations on every chain read.
+    # The greeks are therefore the European sensitivities *at the American
+    # implied volatility*, which is the standard practical compromise and is
+    # closest to wrong for deep in-the-money puts. Stated here so nobody has
+    # to rediscover it from a delta that disagrees with the price.
+    model_price = am.price(spot, strike, tenor, safe_iv, rate, dividend_yield, phi)
+
     return ChainSnapshot(
         ts=now, spot=spot, refs=refs, strike=strike, tenor=tenor, is_call=is_call,
         mark=mark, iv=iv, iv_status=status,
         volume=np.zeros(n) if volume is None else np.asarray(volume, dtype=float),
         open_interest=np.zeros(n) if open_interest is None else np.asarray(open_interest, dtype=float),
         delta=blank(g.delta), gamma=blank(g.gamma), vega=blank(g.vega),
-        theta=blank(g.theta), rho=blank(g.rho), model_price=blank(g.price),
+        theta=blank(g.theta), rho=blank(g.rho), model_price=blank(model_price),
     )

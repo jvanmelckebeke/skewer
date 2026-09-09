@@ -52,17 +52,15 @@ class ExerciseStyle(str, Enum):
     lists both styles on the same underlying (BMW has an American class and a
     European one, same expiry, different trading class).
 
-    A caveat that matters more than the field does: skewer prices every
-    contract with Black-Scholes-Merton, which is a European model. That was
-    already an approximation before Eurex arrived, because US listed equity
-    options are American-style too and always have been. The approximation is
-    good for calls on low-yield names and worst for deep in-the-money puts,
-    where the early-exercise premium is real money.
+    This is a pricing input. An AMERICAN contract is valued and solved with
+    Bjerksund-Stensland (``compute/american.py``), a EUROPEAN one with
+    Black-Scholes-Merton. Before that split existed everything was priced
+    European, which understated every American contract's value and therefore
+    overstated its implied volatility, worst for deep in-the-money puts and
+    for calls on names that pay a dividend.
 
-    So this field does not currently change how anything is priced. It records
-    what the contract actually is, so that the day a Bjerksund-Stensland or
-    binomial path lands, the data needed to dispatch on it is already stored
-    rather than needing a backfill.
+    The greeks are still European sensitivities, evaluated at the American
+    implied volatility. See the note in ``compute/chain.py`` for why.
     """
 
     EUROPEAN = "european"

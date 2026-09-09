@@ -28,6 +28,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from app.services.compute import american as am
 from app.services.compute.bs import greeks, no_arbitrage_bounds, price
 
 # The bracket. 1% annualised is below any real listed equity option; 500% is
@@ -104,8 +105,20 @@ def implied_vol(
     r: float,
     q: np.ndarray,
     phi: np.ndarray,
+    american: np.ndarray | None = None,
 ) -> IVResult:
-    """Solve for sigma such that BSM price == ``market_price``.
+    """Solve for sigma such that the model price == ``market_price``.
+
+    ``american`` is a per-contract bool: True solves against
+    Bjerksund-Stensland, False against Black-Scholes-Merton. None means all
+    European, which is the old behaviour and what every caller that does not
+    know the exercise style should pass.
+
+    Both the price function *and* the no-arbitrage bounds have to switch
+    together. An American option's lower bound is undiscounted intrinsic
+    rather than the discounted forward, so screening a deep in-the-money
+    American put against European bounds rejects a perfectly good quote as
+    violating a bound it was never subject to.
 
     Returns NaN (with a status) wherever no volatility can be implied, rather
     than a fabricated number. Inputs broadcast; all arrays come back aligned
@@ -114,6 +127,20 @@ def implied_vol(
     mp, s, k, t, q, phi = np.broadcast_arrays(
         *(np.asarray(x, dtype=float) for x in (market_price, s, k, t, q, phi))
     )
+    if american is None:
+        is_am = np.zeros(mp.shape, dtype=bool)
+    else:
+        is_am = np.broadcast_to(np.asarray(american, dtype=bool), mp.shape)
+    any_am = bool(is_am.any())
+
+    def model_price(sigma: np.ndarray) -> np.ndarray:
+        euro = price(s, k, ts_for_price, sigma, r, q, phi)
+        if not any_am:
+            return euro
+        # ``american.price`` returns the European value for every contract
+        # whose early exercise is worthless, so this is not double work: it
+        # subsets internally to the ones that need the full formula.
+        return np.where(is_am, am.price(s, k, ts_for_price, sigma, r, q, phi), euro)
     shape = mp.shape
     iv = np.full(shape, np.nan, dtype=float)
     status = np.full(shape, IVStatus.OK, dtype=object)
@@ -127,7 +154,12 @@ def implied_vol(
 
     # Reject prices no volatility can produce. Doing this *before* the solve is
     # what separates "this quote is unusable" from "the solver picked an edge".
-    lo_b, hi_b = no_arbitrage_bounds(s, k, np.where(usable, t, 1.0), r, q, phi)
+    bound_t = np.where(usable, t, 1.0)
+    lo_b, hi_b = no_arbitrage_bounds(s, k, bound_t, r, q, phi)
+    if any_am:
+        am_lo, am_hi = am.no_arbitrage_bounds(s, k, bound_t, r, q, phi)
+        lo_b = np.where(is_am, am_lo, lo_b)
+        hi_b = np.where(is_am, am_hi, hi_b)
     below = usable & (mp < lo_b - BOUND_EPS)
     above = usable & (mp > hi_b - BOUND_EPS)
     status[below] = IVStatus.BELOW_INTRINSIC
@@ -144,8 +176,9 @@ def implied_vol(
     # The root must be bracketed for bisection to mean anything. A price above
     # the value at SIGMA_HI (or below that at SIGMA_LO) is out of range — and
     # "out of range" is reported, never clamped.
-    p_lo = price(s, k, ts, lo, r, q, phi)
-    p_hi = price(s, k, ts, hi, r, q, phi)
+    ts_for_price = ts
+    p_lo = model_price(lo)
+    p_hi = model_price(hi)
     bracketed = usable & (mp >= p_lo) & (mp <= p_hi)
     status[usable & ~bracketed] = IVStatus.NO_ROOT
 
@@ -154,7 +187,7 @@ def implied_vol(
 
     for _ in range(ITERATIONS):
         mid = 0.5 * (lo + hi)
-        p_mid = price(s, k, ts, mid, r, q, phi)
+        p_mid = model_price(mid)
         # Price is monotonically increasing in sigma, so the side to keep is
         # decided by a single comparison — no derivative, no division.
         too_low = p_mid < mp
@@ -166,6 +199,11 @@ def implied_vol(
     # Identifiability gate — see MIN_VEGA. Evaluated at the solved sigma
     # because vega depends on it: a contract can be sensitive at one volatility
     # and numb at another, so the question is only answerable after the solve.
+    #
+    # European vega, even for an American contract. The gate asks whether the
+    # price moves enough with sigma to be readable at quote resolution, and an
+    # American option is at least as sensitive as its European counterpart, so
+    # this errs towards refusing rather than towards inventing.
     vega = greeks(s, k, ts, np.where(bracketed, solved, 0.3), r, q, phi).vega
     identifiable = bracketed & (vega >= MIN_VEGA)
     status[bracketed & ~identifiable] = IVStatus.NO_VEGA

@@ -122,7 +122,16 @@ would write the same integer ~78 times a session.
 - `services/compute/` — pure, I/O-free, vectorised over numpy arrays:
   - `bs.py` — Black-Scholes-Merton pricing and greeks. `phi` (+1 call / -1 put)
     collapses call/put into one formula set.
-  - `iv.py` — the IV solver. **Read its docstring before changing it.**
+  - `iv.py` — the IV solver. **Read its docstring before changing it.** It
+    takes an `american` mask and switches both the price function and the
+    no-arbitrage bounds together; switching one without the other rejects
+    good deep-ITM quotes.
+  - `american.py` — Bjerksund-Stensland 2002, closed-form so it vectorises.
+    Dispatched on `option_contracts.exercise_style`. A call on a non-payer
+    returns the European price exactly, which is most of an OCC chain. Greeks
+    are **not** American: they are European sensitivities at the American
+    implied volatility, because a finite-differenced greek costs ten more
+    price evaluations per chain read.
   - `chain.py` — `enrich()` builds a `ChainSnapshot` from raw columns.
   - `analytics.py` — `METRIC_REGISTRY`, skewer's answer to fibenchi's
     `INDICATOR_REGISTRY`. Add a metric with the `@chain_metric` decorator.
@@ -307,10 +316,6 @@ IV 37.5%.
 
 ### Known gaps
 
-- **BSM prices American options.** Both venues list American-style equity
-  options and skewer prices them European. That predates Eurex — US listed
-  options are American too — but Eurex makes it visible by publishing
-  `ExerciseStyle` per contract. The field is stored and dispatched on nowhere.
 - **A corporate action breaks the dimension table's immutability, and the break
   is recorded rather than hidden.** Eurex adjusts terms and issues a new ISIN,
   so the adjusted contract is still a new row. `version_nr`, `generation_nr`

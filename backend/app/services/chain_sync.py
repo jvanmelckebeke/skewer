@@ -25,7 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.domain.cadence import floor_to_slot, should_persist
-from app.domain.venue import Venue, spec_for
+from app.domain.venue import ExerciseStyle, Venue, spec_for
 from app.repositories.contract_repo import ContractRepository
 from app.repositories.quote_repo import QuoteRepository
 from app.repositories.underlying_repo import UnderlyingRepository
@@ -195,6 +195,13 @@ async def persist_chain(
         # produces claims to have been observed at yesterday's close.
         tenor = np.array([q.ref.year_fraction(slot) for q in selected])
         phi = np.array([CALL if q.ref.right.value == "call" else PUT for q in selected])
+        # Both venues list American-style equity options, and the European
+        # price is a strict lower bound on an American one, so solving with
+        # the wrong model biases every volatility it produces. Eurex publishes
+        # the style per contract and lists both on the same underlying.
+        american = np.array(
+            [q.ref.exercise_style is ExerciseStyle.AMERICAN for q in selected], dtype=bool
+        )
 
         # The yield is measured off the *whole* fetched chain, not off
         # `selected`. Cadence selection is by tenor bucket, so an intraday
@@ -214,7 +221,10 @@ async def persist_chain(
             )
         q_used = yield_per_contract(by_expiry, tenor, dividend_yield)
 
-        res = implied_vol(mark, spot, strike, tenor, settings.risk_free_rate, q_used, phi)
+        res = implied_vol(
+            mark, spot, strike, tenor, settings.risk_free_rate, q_used, phi,
+            american=american,
+        )
         iv, iv_status = res.iv, res.status
 
         # Write the measurement back so the read path prices against it too:

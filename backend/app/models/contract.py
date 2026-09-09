@@ -73,10 +73,9 @@ class OptionContract(Base):
     )
 
     # Recorded, not assumed: Eurex lists both styles on the same underlying at
-    # the same expiry. It does not currently change pricing — see the note on
-    # ExerciseStyle in domain/venue.py, which explains why BSM is applied to
-    # American contracts on both venues — but storing it now means the day a
-    # binomial path lands there is no backfill to do.
+    # the same expiry. It is what `chain_sync` and `enrich` dispatch on to
+    # choose between Black-Scholes-Merton and Bjerksund-Stensland, so it is a
+    # pricing input rather than a label.
     exercise_style: Mapped[ExerciseStyle] = mapped_column(
         Enum(
             ExerciseStyle,
