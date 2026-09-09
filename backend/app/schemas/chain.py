@@ -49,6 +49,14 @@ class ChainResponse(BaseModel):
     expirations: list[date]
     contracts: list[ContractQuote]
     metrics: dict[str, float | None] = {}
+    # The q the greeks on this chain were solved against. Carried on the
+    # response because it is a pricing input the reader cannot otherwise see,
+    # and a delta computed at the wrong yield looks exactly like one computed
+    # at the right yield.
+    dividend_yield: float | None = None
+    # True when a human set it, false when it was read off put-call parity.
+    # The distinction matters: a measurement moves with the next poll.
+    dividend_yield_is_manual: bool = False
 
 
 class SmileResponse(BaseModel):

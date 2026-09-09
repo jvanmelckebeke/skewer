@@ -21,7 +21,7 @@ import {
 } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { useChain, useSessionProfile, useTermStructure } from "@/hooks/queries"
-import { formatDate, formatTimestamp, integer, money } from "@/lib/format"
+import { formatDate, formatTimestamp, integer, money, percent } from "@/lib/format"
 import type { ContractQuote } from "@/types"
 
 export function ChainPage() {
@@ -74,7 +74,7 @@ export function ChainPage() {
     )
   }
 
-  const { spot, ts, contracts, metrics } = chain.data
+  const { spot, ts, contracts, metrics, dividend_yield, dividend_yield_is_manual } = chain.data
   const priced = contracts.filter((contract) => contract.iv !== null).length
 
   return (
@@ -91,6 +91,18 @@ export function ChainPage() {
           <p className="text-sm text-muted-foreground">
             Snapshot {formatTimestamp(ts)} · {integer(contracts.length)} contracts,{" "}
             {integer(priced)} with an identifiable volatility
+            {dividend_yield === null ? null : (
+              <>
+                {" · priced at a "}
+                {percent(dividend_yield)} dividend yield{" "}
+                {/*
+                  Worth saying which it is. A measured yield moves with the
+                  next poll and a stated one does not, so a delta that shifts
+                  overnight has two very different explanations.
+                */}
+                {dividend_yield_is_manual ? "(set by hand)" : "(implied by the chain)"}
+              </>
+            )}
           </p>
         </div>
         <Badge variant="outline">{expirations.length} expirations</Badge>

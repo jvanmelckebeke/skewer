@@ -30,6 +30,11 @@ from app.repositories.contract_repo import ContractRepository
 from app.repositories.quote_repo import QuoteRepository
 from app.repositories.underlying_repo import UnderlyingRepository
 from app.services.compute.bs import CALL, PUT
+from app.services.compute.dividends import (
+    implied_yield_by_expiry,
+    representative_yield,
+    yield_per_contract,
+)
 from app.services.compute.iv import IVStatus, implied_vol, mid_price
 from app.services.option_providers import ChainUnavailable, RawChain, for_venue
 
@@ -54,6 +59,7 @@ async def sync_underlying(
     db: AsyncSession, underlying_id: int, symbol: str, dividend_yield: float = 0.0,
     full: bool = False, now: datetime | None = None,
     venue: Venue = Venue.OCC, venue_product: str | None = None,
+    imply_dividends: bool = True,
 ) -> SyncResult:
     """Poll one underlying and persist the selected slice of its chain.
 
@@ -92,13 +98,14 @@ async def sync_underlying(
     return await persist_chain(
         db, underlying_id, chain, dividend_yield,
         full=full, now=now, settled=not provider.intraday,
+        imply_dividends=imply_dividends,
     )
 
 
 async def persist_chain(
     db: AsyncSession, underlying_id: int, chain: RawChain,
     dividend_yield: float = 0.0, full: bool = False, now: datetime | None = None,
-    settled: bool = False,
+    settled: bool = False, imply_dividends: bool = True,
 ) -> SyncResult:
     """Persist an already-fetched chain. Split out so it is testable without
     touching the network — the fetch is the only impure part above.
@@ -106,7 +113,11 @@ async def persist_chain(
     ``settled`` says the chain is a settlement cross-section rather than a
     live one, which decides the slot it lands in. It is passed in rather than
     read off the provider registry so this stays a pure function of its
-    arguments."""
+    arguments.
+
+    ``imply_dividends`` is off when a human has set the yield by hand. That is
+    the same provenance rule fibenchi applies to asset type and currency: a
+    measurement never overwrites a stated value."""
     now = now or datetime.now(tz=timezone.utc)
     slot = _slot_for(chain, now, settled)
     today = slot.date()
@@ -136,21 +147,7 @@ async def persist_chain(
 
     # 3. Solve IV on the survivors, in one vectorised pass.
     spot = chain.spot
-    bid = np.array([q.bid if q.bid is not None else np.nan for q in selected])
-    ask = np.array([q.ask if q.ask is not None else np.nan for q in selected])
-    mark = mid_price(bid, ask)
-
-    # Fall back to the exchange's official settlement where there is no
-    # two-sided quote to take a mid from. This is *not* a relaxation of the
-    # zero-bid rule — that rule exists because Yahoo's 0.0 means "nobody is
-    # quoting", and a settlement price means the opposite: it is the venue's
-    # considered valuation, struck against the closing auction. Eurex's free
-    # feed publishes nothing but settlements, so without this a European chain
-    # would store no marks and solve no IV at all.
-    settlement = np.array(
-        [q.settlement if q.settlement is not None else np.nan for q in selected]
-    )
-    mark = np.where(np.isfinite(mark), mark, settlement)
+    mark = _marks(selected)
 
     if spot is None or spot <= 0:
         # No spot means no pricing basis at all. The quotes are still worth
@@ -170,8 +167,35 @@ async def persist_chain(
         # produces claims to have been observed at yesterday's close.
         tenor = np.array([q.ref.year_fraction(slot) for q in selected])
         phi = np.array([CALL if q.ref.right.value == "call" else PUT for q in selected])
-        res = implied_vol(mark, spot, strike, tenor, settings.risk_free_rate, dividend_yield, phi)
+
+        # The yield is measured off the *whole* fetched chain, not off
+        # `selected`. Cadence selection is by tenor bucket, so an intraday
+        # tick often contains nothing but contracts inside a week — exactly
+        # the ones parity refuses to answer for. Measuring on the subset would
+        # mean the yield were only ever available on the slots that need it
+        # least.
+        by_expiry = {}
+        if imply_dividends:
+            by_expiry = implied_yield_by_expiry(
+                spot,
+                np.array([q.ref.strike for q in chain.quotes]),
+                np.array([q.ref.year_fraction(slot) for q in chain.quotes]),
+                np.array([q.ref.right.value == "call" for q in chain.quotes]),
+                _marks(chain.quotes),
+                settings.risk_free_rate,
+            )
+        q_used = yield_per_contract(by_expiry, tenor, dividend_yield)
+
+        res = implied_vol(mark, spot, strike, tenor, settings.risk_free_rate, q_used, phi)
         iv, iv_status = res.iv, res.status
+
+        # Write the measurement back so the read path prices against it too:
+        # `chain_service` builds its greeks from `underlyings.dividend_yield`,
+        # so leaving it at zero here would fix the stored IV and leave every
+        # delta on the chain page disagreeing with it.
+        measured = representative_yield(by_expiry)
+        if measured is not None:
+            await UnderlyingRepository(db).set_implied_yield(underlying_id, measured)
 
     def _f(value):
         """NaN -> None at the DB boundary. NaN is a float and would happily
@@ -217,6 +241,26 @@ async def persist_chain(
         symbol=chain.symbol, fetched=len(chain.quotes), persisted=persisted,
         new_contracts=after - before, iv_solved=solved, daily_rows=daily_rows, slot=slot,
     )
+
+
+def _marks(quotes: list) -> np.ndarray:
+    """The price each contract is valued at, or NaN where there is none.
+
+    Falls back to the exchange's official settlement where there is no
+    two-sided quote to take a mid from. This is *not* a relaxation of the
+    zero-bid rule — that rule exists because Yahoo's 0.0 means "nobody is
+    quoting", and a settlement price means the opposite: it is the venue's
+    considered valuation, struck against the closing auction. Eurex's free
+    feed publishes nothing but settlements, so without this a European chain
+    would store no marks and solve no IV at all.
+    """
+    bid = np.array([q.bid if q.bid is not None else np.nan for q in quotes])
+    ask = np.array([q.ask if q.ask is not None else np.nan for q in quotes])
+    settlement = np.array(
+        [q.settlement if q.settlement is not None else np.nan for q in quotes]
+    )
+    mark = mid_price(bid, ask)
+    return np.where(np.isfinite(mark), mark, settlement)
 
 
 def _slot_for(chain: RawChain, now: datetime, settled: bool) -> datetime:
@@ -300,16 +344,18 @@ async def sync_all(
     # Snapshot the scalars while the rows are live: the loop below commits and
     # may roll back, and either expires every ORM instance in the session.
     targets = [
-        (u.id, u.symbol, float(u.dividend_yield or 0.0), u.venue, u.venue_product)
+        (u.id, u.symbol, float(u.dividend_yield or 0.0), u.venue, u.venue_product,
+         bool(u.dividend_yield_is_manual))
         for u in underlyings
     ]
 
     results = []
-    for uid, symbol, div, venue, venue_product in targets:
+    for uid, symbol, div, venue, venue_product, manual_div in targets:
         try:
             result = await sync_underlying(
                 db, uid, symbol, div, full=full, now=now,
                 venue=venue, venue_product=venue_product,
+                imply_dividends=not manual_div,
             )
         except Exception:
             logger.warning("Chain sync failed for %s; skipping", symbol, exc_info=True)

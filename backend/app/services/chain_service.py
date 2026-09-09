@@ -161,6 +161,8 @@ async def chain_view(
         # requested, which is deliberate: "ATM IV" for one expiry is a
         # different and more useful number than the front-month one.
         "metrics": compute_all(snap) if with_metrics else {},
+        "dividend_yield": _f(underlying.dividend_yield),
+        "dividend_yield_is_manual": bool(underlying.dividend_yield_is_manual),
     }
 
 

@@ -101,6 +101,10 @@ export interface ChainResponse {
   expirations: string[]
   contracts: ContractQuote[]
   metrics: Record<string, number | null>
+  /** The q every greek on this chain was solved against. */
+  dividend_yield: number | null
+  /** True when a human set it; false when it was read off put-call parity. */
+  dividend_yield_is_manual: boolean
 }
 
 export interface TermPoint {

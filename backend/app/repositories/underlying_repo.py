@@ -59,6 +59,23 @@ class UnderlyingRepository:
         )
         await self.db.commit()
 
+    async def set_implied_yield(self, underlying_id: int, value: float) -> None:
+        """Record a yield measured off the chain.
+
+        Guarded on ``dividend_yield_is_manual`` in SQL rather than in the
+        caller, so no future call site can forget it: a stated value outranks
+        a measured one, and the collector runs every five minutes.
+        """
+        await self.db.execute(
+            update(Underlying)
+            .where(
+                Underlying.id == underlying_id,
+                Underlying.dividend_yield_is_manual.is_(False),
+            )
+            .values(dividend_yield=value)
+        )
+        await self.db.commit()
+
     async def mark_eod(self, underlying_id: int, on: date) -> None:
         await self.db.execute(
             update(Underlying).where(Underlying.id == underlying_id).values(last_eod_snapshot_on=on)
