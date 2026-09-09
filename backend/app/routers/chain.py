@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.schemas.chain import (
     ChainResponse,
+    ChainSummaryRow,
     ContractSeriesResponse,
     MetricDescriptor,
     SessionProfileResponse,
@@ -26,6 +27,24 @@ async def list_metrics():
         {"id": m.id, "label": m.label, "unit": m.unit, "description": m.description}
         for m in METRIC_REGISTRY.values()
     ]
+
+
+@router.get(
+    "/summary",
+    response_model=list[ChainSummaryRow],
+    summary="Spot and chain metrics for every tracked underlying",
+)
+async def get_chain_summary(
+    group_id: int | None = Query(None, description="Restrict to one group's members."),
+    db: AsyncSession = Depends(get_db),
+):
+    """The overview's data in one call.
+
+    Registered before ``/{symbol}`` on purpose: FastAPI matches routes in
+    declaration order, so a literal path defined after the parameterised one
+    is never reached.
+    """
+    return await chain_service.chain_summary(db, group_id=group_id)
 
 
 @router.get("/{symbol}", response_model=ChainResponse, summary="Option chain snapshot")

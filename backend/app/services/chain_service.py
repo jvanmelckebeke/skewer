@@ -10,9 +10,10 @@ from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.occ import ContractRef
+from app.repositories.group_repo import GroupRepository
 from app.repositories.quote_repo import QuoteRepository
 from app.repositories.underlying_repo import UnderlyingRepository
-from app.services.compute.analytics import compute_all, smile, term_structure
+from app.services.compute.analytics import METRIC_REGISTRY, compute_all, smile, term_structure
 from app.services.compute.bs import per_day, per_point
 from app.services.compute.chain import ChainSnapshot, enrich
 
@@ -38,6 +39,19 @@ async def load_snapshot(
     contract has since moved. One IV per stored row, decided once.
     """
     underlying = await get_underlying_or_404(db, symbol)
+    return await load_snapshot_for(db, underlying, at=at, expiration=expiration)
+
+
+async def load_snapshot_for(
+    db: AsyncSession, underlying, at: datetime | None = None,
+    expiration: date | None = None,
+) -> tuple[ChainSnapshot, object, list[tuple], datetime]:
+    """:func:`load_snapshot` for a row already in hand.
+
+    The summary endpoint walks every tracked underlying, and looking each one
+    up again by symbol when the ORM row is already loaded is a query per row
+    for nothing.
+    """
     repo = QuoteRepository(db)
 
     ts = at or await repo.latest_ts(underlying.id)
@@ -146,6 +160,59 @@ async def chain_view(
         # different and more useful number than the front-month one.
         "metrics": compute_all(snap) if with_metrics else {},
     }
+
+
+async def chain_summary(db: AsyncSession, group_id: int | None = None) -> list[dict]:
+    """One row per tracked underlying: spot plus every registered metric.
+
+    Built for the overview, which needs the same numbers for N underlyings and
+    would otherwise pull N full chains over the wire to compute them client
+    side. The metric set is read from ``METRIC_REGISTRY``, so a metric added
+    with ``@chain_metric`` shows up here for free, exactly as it does on the
+    chain page.
+
+    An underlying that has never been polled is a row of nulls rather than an
+    omission or an error. Leaving it out would make a freshly added ticker
+    look untracked.
+    """
+    if group_id is None:
+        underlyings = await UnderlyingRepository(db).list_all()
+    else:
+        group = await GroupRepository(db).get(group_id)
+        if group is None:
+            raise HTTPException(404, f"No group with id {group_id}")
+        underlyings = list(group.underlyings)
+
+    rows = []
+    for underlying in underlyings:
+        row = {
+            "symbol": underlying.symbol,
+            "name": underlying.name,
+            "venue": underlying.venue,
+            "currency": underlying.currency,
+            "is_active": underlying.is_active,
+            "ts": None,
+            "spot": None,
+            "metrics": {mid: None for mid in METRIC_REGISTRY},
+        }
+        try:
+            snap, _u, _raw, ts = await load_snapshot_for(db, underlying)
+        except HTTPException:
+            # 404 from the loader means "nothing stored yet", which is the
+            # normal state for a new ticker and not worth failing the list for.
+            rows.append(row)
+            continue
+
+        spot = _f(snap.spot)
+        row["ts"] = ts
+        # load_snapshot falls back to 0.0 when no row carried a spot. Zero is
+        # never a real price, so it travels as null rather than as a number
+        # that would format like one.
+        row["spot"] = spot if spot else None
+        row["metrics"] = {mid: _f(value) for mid, value in compute_all(snap).items()}
+        rows.append(row)
+
+    return rows
 
 
 async def smile_view(db: AsyncSession, symbol: str, expiration: date, at: datetime | None = None) -> dict:

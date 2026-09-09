@@ -2,6 +2,8 @@ from datetime import date, datetime
 
 from pydantic import BaseModel, Field
 
+from app.domain.venue import Venue
+
 
 class ContractQuote(BaseModel):
     """One contract at one instant, with everything derived filled in.
@@ -71,6 +73,28 @@ class TermStructureResponse(BaseModel):
     ts: datetime
     spot: float | None
     points: list[TermPoint]
+
+
+class ChainSummaryRow(BaseModel):
+    """One tracked underlying, reduced to the numbers a list can show.
+
+    Every registered metric appears in ``metrics`` whether or not it could be
+    computed, so a client can render a fixed set of columns without checking
+    which keys came back. A missing value is null, and null here means the
+    chain could not answer, not that the answer was zero.
+    """
+
+    symbol: str
+    name: str
+    venue: Venue
+    currency: str
+    is_active: bool
+
+    # Null until the first poll lands. An underlying added a minute ago is a
+    # normal row with nothing in it, not an error.
+    ts: datetime | None
+    spot: float | None
+    metrics: dict[str, float | None]
 
 
 class MetricDescriptor(BaseModel):
