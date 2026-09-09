@@ -25,7 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.domain.cadence import floor_to_slot, should_persist
-from app.domain.venue import Venue
+from app.domain.venue import Venue, spec_for
 from app.repositories.contract_repo import ContractRepository
 from app.repositories.quote_repo import QuoteRepository
 from app.repositories.underlying_repo import UnderlyingRepository
@@ -83,21 +83,32 @@ async def sync_underlying(
     # A settlement-only feed has no intraday shape to sample: there is exactly
     # one observation per contract per session, so cadence selection has
     # nothing to choose between and would drop most of the chain for no
-    # reason. Every poll of such a venue is therefore a full one.
+    # reason. Every poll of such a venue is therefore a full one — and lands
+    # in the session's own slot, so polling it repeatedly rewrites one
+    # cross-section rather than accumulating copies. See ``_slot_for``.
     if not provider.intraday:
         full = True
 
-    return await persist_chain(db, underlying_id, chain, dividend_yield, full=full, now=now)
+    return await persist_chain(
+        db, underlying_id, chain, dividend_yield,
+        full=full, now=now, settled=not provider.intraday,
+    )
 
 
 async def persist_chain(
     db: AsyncSession, underlying_id: int, chain: RawChain,
     dividend_yield: float = 0.0, full: bool = False, now: datetime | None = None,
+    settled: bool = False,
 ) -> SyncResult:
     """Persist an already-fetched chain. Split out so it is testable without
-    touching the network — the fetch is the only impure part above."""
+    touching the network — the fetch is the only impure part above.
+
+    ``settled`` says the chain is a settlement cross-section rather than a
+    live one, which decides the slot it lands in. It is passed in rather than
+    read off the provider registry so this stays a pure function of its
+    arguments."""
     now = now or datetime.now(tz=timezone.utc)
-    slot = floor_to_slot(now, settings.base_poll_minutes)
+    slot = _slot_for(chain, now, settled)
     today = slot.date()
 
     contract_repo = ContractRepository(db)
@@ -152,7 +163,12 @@ async def persist_chain(
         logger.warning("%s: no spot in chain response; storing quotes without IV", chain.symbol)
     else:
         strike = np.array([q.ref.strike for q in selected])
-        tenor = np.array([q.ref.year_fraction(now) for q in selected])
+        # Tenor is measured from the slot, not from the wall clock. For an
+        # intraday poll they are the same instant to within one cadence step.
+        # For a settlement chain they differ by a day, and measuring from now
+        # would shorten every contract's life by that day while the row it
+        # produces claims to have been observed at yesterday's close.
+        tenor = np.array([q.ref.year_fraction(slot) for q in selected])
         phi = np.array([CALL if q.ref.right.value == "call" else PUT for q in selected])
         res = implied_vol(mark, spot, strike, tenor, settings.risk_free_rate, dividend_yield, phi)
         iv, iv_status = res.iv, res.status
@@ -203,6 +219,39 @@ async def persist_chain(
     )
 
 
+def _slot_for(chain: RawChain, now: datetime, settled: bool) -> datetime:
+    """The instant a chain's rows are stamped with.
+
+    For an intraday feed that is the current cadence slot: the poll is the
+    observation. For a settlement-only feed it is the close of the session the
+    settlements were struck at, which is what makes re-polling idempotent —
+    ``(contract_id, ts)`` is the natural key, so the second poll of the day
+    updates the same cross-section instead of appending a copy of it. Before
+    this, one EURO STOXX 50 chain wrote 7,364 identical rows into each of ~78
+    slots a day.
+
+    It is also the honest timestamp. A settlement is a real simultaneous
+    cross-section, but the moment it was taken is yesterday's close, not now,
+    and every read in the app treats ``ts`` as when the prices were observed.
+    """
+    if not settled:
+        return floor_to_slot(now, settings.base_poll_minutes)
+
+    if chain.session_date is None:
+        # Nothing to anchor to. The quotes are still worth keeping, so fall
+        # back rather than dropping the poll — but say so, because this slot
+        # is the one case where ts does not mean what it claims.
+        logger.warning(
+            "%s: settlement chain carries no session date; stamping it with the current slot",
+            chain.symbol,
+        )
+        return floor_to_slot(now, settings.base_poll_minutes)
+
+    spec = spec_for(chain.venue)
+    close = datetime.combine(chain.session_date, spec.session_close, tzinfo=spec.expiry_tz)
+    return floor_to_slot(close.astimezone(timezone.utc), settings.base_poll_minutes)
+
+
 async def _write_daily(
     quote_repo: QuoteRepository, selected: list, ids: dict[str, int],
     mark: np.ndarray, iv: np.ndarray, spot: float | None,
@@ -238,6 +287,12 @@ async def sync_all(
     a collection cycle — the same guarantee fibenchi's ``_persist_symbol``
     provides for its nightly refresh.
     """
+    # When the collector last spoke to the feed, which is not the slot the
+    # rows landed in: a settlement chain is stamped with the session it was
+    # struck at, so reading freshness off the slot would report every European
+    # name as a day stale the moment it was polled.
+    polled_at = now or datetime.now(tz=timezone.utc)
+
     underlyings = await UnderlyingRepository(db).list_active()
     if not underlyings:
         return []
@@ -264,7 +319,7 @@ async def sync_all(
         try:
             repo = UnderlyingRepository(db)
             if result.slot is not None:
-                await repo.mark_polled(uid, result.slot)
+                await repo.mark_polled(uid, polled_at)
             if full and result.daily_rows:
                 await repo.mark_eod(uid, (result.slot or datetime.now(tz=timezone.utc)).date())
         except Exception:
