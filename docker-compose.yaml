@@ -9,6 +9,7 @@ services:
     # a hypertable; everything else is ordinary relational tables in the same
     # database, so contract metadata and ticks stay transactionally consistent.
     image: timescale/timescaledb:latest-pg16
+    restart: unless-stopped
     environment:
       POSTGRES_USER: skewer
       POSTGRES_PASSWORD: skewer
@@ -25,6 +26,7 @@ services:
 
   backend:
     build: ./backend
+    restart: unless-stopped
     environment:
       DATABASE_URL: postgresql+asyncpg://skewer:skewer@db:5432/skewer
       BASE_POLL_MINUTES: ${BASE_POLL_MINUTES:-5}
