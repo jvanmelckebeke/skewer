@@ -103,8 +103,15 @@ class OptionProvider(ABC):
     intraday: bool = True
 
     @abstractmethod
-    async def fetch_chain(self, symbol: str) -> RawChain:
+    async def fetch_chain(self, symbol: str, product: str | None = None) -> RawChain:
         """Fetch the full option chain for one underlying.
+
+        ``product`` is the venue's own code for the option series, from
+        ``underlyings.venue_product``. It is not derivable from the ticker in
+        general — Eurex lists ArcelorMittal's options under ``ISPA`` — so a
+        provider that has its own symbology takes it here and falls back to
+        the ticker when it is None. Yahoo ignores it: on OPRA the ticker *is*
+        the product.
 
         Raises :class:`ChainUnavailable` when the symbol has no options (every
         non-US listing, and plenty of US small caps).
@@ -119,12 +126,17 @@ class OptionProvider(ABC):
         """
 
     @abstractmethod
-    async def validate(self, symbol: str) -> tuple[bool, str]:
+    async def validate(self, symbol: str, product: str | None = None) -> tuple[bool, str]:
         """Whether ``symbol`` is trackable, and its display name.
 
         Used when adding an underlying, so a user gets an immediate, specific
         rejection ("no listed options") instead of a ticker that silently
         collects nothing.
+
+        ``product`` has to be honoured here and not only in ``fetch_chain``:
+        validation is what decides whether the row is created, so a provider
+        that ignores it rejects every underlying whose venue code differs from
+        its ticker before the code it was given is ever stored.
         """
 
 

@@ -44,6 +44,11 @@ async def add_underlying(
     exists to catch is a tracked underlying that silently collects nothing
     forever.
 
+    ``venue_product`` is passed to the validator, not just stored. The check
+    is what decides whether the row exists at all, so validating the bare
+    ticker would reject every underlying the code was needed for — Eurex lists
+    ArcelorMittal (MT.AS) under ``ISPA``.
+
     When ``venue`` is omitted the venues are tried in turn and the first that
     actually returns a chain wins. That is what makes ``NVDA`` and ``BMW.DE``
     both work without the user having to know that one is OPRA and the other
@@ -64,7 +69,7 @@ async def add_underlying(
     name = ""
     for candidate in candidates:
         try:
-            ok, found = await for_venue(candidate).validate(symbol)
+            ok, found = await for_venue(candidate).validate(symbol, venue_product)
         except Exception:
             logger.warning("Validation failed for %s on %s", symbol, candidate, exc_info=True)
             continue

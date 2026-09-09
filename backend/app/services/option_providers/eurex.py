@@ -332,8 +332,8 @@ class EurexOptionProvider(OptionProvider):
             out[chain.symbol] = chain
         return out
 
-    async def validate(self, symbol: str) -> tuple[bool, str]:
-        code = self.product_for(symbol)
+    async def validate(self, symbol: str, product: str | None = None) -> tuple[bool, str]:
+        code = self.product_for(symbol, product)
         try:
             info = await self._product_info(code)
         except Exception:

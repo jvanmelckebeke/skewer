@@ -181,7 +181,7 @@ class YahooOptionProvider(OptionProvider):
         block = price.get(symbol) or price.get(symbol.upper())
         return block if isinstance(block, dict) else None
 
-    async def fetch_chain(self, symbol: str) -> RawChain:
+    async def fetch_chain(self, symbol: str, product: str | None = None) -> RawChain:
         chains = await self.fetch_chains([symbol])
         chain = chains.get(symbol.upper())
         if chain is None:
@@ -326,7 +326,9 @@ class YahooOptionProvider(OptionProvider):
             currency=row.get("currency") or "USD",
         )
 
-    async def validate(self, symbol: str) -> tuple[bool, str]:
+    async def validate(self, symbol: str, product: str | None = None) -> tuple[bool, str]:
+        # `product` is accepted and ignored. An OCC series is named by the
+        # underlying's own ticker, so there is no second code to carry.
         try:
             chain = await self.fetch_chain(symbol)
         except ChainUnavailable:

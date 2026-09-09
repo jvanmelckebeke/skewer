@@ -513,7 +513,7 @@ class EuronextOptionProvider(OptionProvider):
             out[chain.symbol] = chain
         return out
 
-    async def validate(self, symbol: str) -> tuple[bool, str]:
+    async def validate(self, symbol: str, product: str | None = None) -> tuple[bool, str]:
         """Whether the contract code resolves to at least one live option.
 
         Deliberately cheap: it probes the nearest maturities at strikes around
@@ -523,7 +523,7 @@ class EuronextOptionProvider(OptionProvider):
         if not self.configured:
             return False, ""
 
-        exchange, code = self.product_for(symbol)
+        exchange, code = self.product_for(symbol, product)
         spot_block = await self._spot(symbol)
         spot = (spot_block or {}).get("spot")
         if not spot:
