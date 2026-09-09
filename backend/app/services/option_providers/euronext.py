@@ -366,6 +366,10 @@ class EuronextOptionProvider(OptionProvider):
             symbol=symbol.upper(),
             name=(spot_block or {}).get("name") or symbol,
             currency=quotes[0].currency,
+            # Euronext serves the instrument and its options from the same
+            # gateway, on the same market. Unlike the Eurex path there is no
+            # second feed to disagree with.
+            spot_currency=quotes[0].currency,
             venue=Venue.EURONEXT,
             spot=spot,
             bid=(spot_block or {}).get("bid"),

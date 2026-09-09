@@ -283,6 +283,14 @@ anonymous. It is CORS-open, so Apollo Sandbox works against it directly.
   zero-bid rule, it is its mirror image: Yahoo's 0.0 is the *absence* of a
   quote, while a settlement is the exchange's own valuation struck against the
   closing auction.
+- **The option's currency and the spot's are checked, not assumed.** Two feeds
+  compose, and nothing makes them agree: the Eurex product `COPA` is an option
+  on WisdomTree Copper settling in USD, while Yahoo's `COPA.MI` is the Milan
+  listing in EUR. `IWDA.AS` is the same shape. A mismatch stores the quotes and
+  refuses to price them (`iv_status = 'fx_mismatch'`), because converting would
+  need an FX rate at the settlement instant that skewer does not collect. A
+  provider that cannot name its spot's currency reports None, read as
+  agreement.
 - **Spot must come from the settlement's session, not from now.** Eurex settles
   yesterday; pricing that against a live spot pushed 252 of BMW's 952 contracts
   below their own no-arbitrage bound, and silently skewed every one that did

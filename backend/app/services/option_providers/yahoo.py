@@ -263,6 +263,10 @@ class YahooOptionProvider(OptionProvider):
             symbol=symbol,
             name=quote.get("shortName") or quote.get("longName") or symbol,
             currency=quote.get("currency") or "USD",
+            # One response carries the chain and the spot, so they cannot
+            # disagree. Stated rather than left None so the check downstream
+            # is exercised on this venue too instead of skipped.
+            spot_currency=(quote.get("currency") or "USD").upper(),
             venue=Venue.OCC,
             spot=_num(quote.get("regularMarketPrice")),
             bid=_num(quote.get("bid")),

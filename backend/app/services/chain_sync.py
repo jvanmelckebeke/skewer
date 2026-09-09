@@ -162,7 +162,22 @@ async def persist_chain(
     spot = chain.spot
     mark = _marks(selected)
 
-    if spot is None or spot <= 0:
+    if _currency_mismatch(chain):
+        # Refuse rather than convert. The strikes are in the option's
+        # currency and the spot is in another, so every moneyness is wrong by
+        # the exchange rate and the solver answers anyway: COPA.MI implied an
+        # ATM vol of 300% against a spot 8 points low, which is the failure
+        # mode this codebase cares most about, a plausible number rather than
+        # a missing one. Converting would need an FX rate skewer does not
+        # collect, at the settlement instant, and would have to be recorded
+        # alongside the quote to be auditable later.
+        iv = np.full(len(selected), np.nan)
+        iv_status = np.full(len(selected), IVStatus.FX_MISMATCH, dtype=object)
+        logger.warning(
+            "%s: options settle in %s but the spot is quoted in %s; storing quotes unpriced",
+            chain.symbol, chain.currency, chain.spot_currency,
+        )
+    elif spot is None or spot <= 0:
         # No spot means no pricing basis at all. The quotes are still worth
         # storing — they are the market's prices and are not retroactively
         # recoverable — but nothing derived from them can be computed, and
@@ -254,6 +269,25 @@ async def persist_chain(
         symbol=chain.symbol, fetched=len(chain.quotes), persisted=persisted,
         new_contracts=after - before, iv_solved=solved, daily_rows=daily_rows, slot=slot,
     )
+
+
+def _currency_mismatch(chain: RawChain) -> bool:
+    """Whether the chain's strikes and its spot are on the same scale.
+
+    Eurex composes two feeds: Deutsche Boerse publishes the option product
+    and its currency, Yahoo supplies the spot the surface is measured
+    against. Nothing makes them agree. The Eurex product COPA is an option on
+    WisdomTree Copper settling in USD, while Yahoo's COPA.MI is the Milan
+    listing in EUR.
+
+    A provider that cannot name its spot's currency reports None, and that is
+    read as agreement. Refusing on "unknown" would silently unprice every
+    venue that does not answer the question, which is a worse failure than
+    the one being guarded against.
+    """
+    if not chain.currency or not chain.spot_currency:
+        return False
+    return chain.currency.strip().upper() != chain.spot_currency.strip().upper()
 
 
 def _marks(quotes: list) -> np.ndarray:

@@ -310,6 +310,7 @@ class EurexOptionProvider(OptionProvider):
             fetched_at=fetched_at,
             expirations=sorted(expirations),
             quotes=quotes,
+            spot_currency=(spot_block or {}).get("currency"),
         )
 
     async def fetch_chains(self, symbols: list[str]) -> dict[str, RawChain]:
@@ -472,6 +473,9 @@ class EurexOptionProvider(OptionProvider):
 
         return {
             "spot": _pos(block.get("regularMarketPrice")),
+            # The one field that says whether the spot and the strikes are
+            # even on the same scale. See RawChain.spot_currency.
+            "currency": (block.get("currency") or "").upper() or None,
             "bid": _pos(block.get("bid")),
             "ask": _pos(block.get("ask")),
             "previous_close": _pos(block.get("regularMarketPreviousClose")),

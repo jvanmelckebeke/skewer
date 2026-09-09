@@ -81,6 +81,7 @@ class IVStatus:
     ABOVE_BOUND = "above_bound"    # quote violates the upper no-arb bound
     NO_ROOT = "no_root"            # bracketed solve did not converge in range
     NO_VEGA = "no_vega"            # price is insensitive to sigma; IV unidentifiable
+    FX_MISMATCH = "fx_mismatch"    # spot and strikes are in different currencies
 
 
 @dataclass(frozen=True, slots=True)

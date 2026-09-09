@@ -79,6 +79,12 @@ class RawChain:
     fetched_at: datetime
     expirations: list[date]
     quotes: list[RawOptionQuote]
+    # What ``spot`` is denominated in, when the provider knows. ``currency``
+    # above is the *option's*, and on a composed feed the two can differ: the
+    # Eurex product COPA settles in USD while its spot comes from Yahoo's
+    # Milan listing in EUR. None means the provider cannot say, which is
+    # treated as agreement rather than as a mismatch.
+    spot_currency: str | None = None
 
     def __len__(self) -> int:
         return len(self.quotes)
