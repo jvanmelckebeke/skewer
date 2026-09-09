@@ -66,10 +66,10 @@ async def load_snapshot_for(
 
     oi_map = await repo.latest_open_interest(underlying.id)
 
-    refs, bid, ask, iv, volume, oi, spots = [], [], [], [], [], [], []
+    refs, bid, ask, mark, iv, volume, oi, spots = [], [], [], [], [], [], [], []
     for (cid, sym, venue, expiration, strike, right, exercise_style,
          contract_size, currency,
-         b, a, _mark, _last, _lta, vol, spot, iv_v, _ivp, _st) in rows:
+         b, a, mark_v, _last, _lta, vol, spot, iv_v, _ivp, _st) in rows:
         refs.append(ContractRef(
             symbol=sym, venue=venue, root=sym.split(":")[-1],
             expiration=expiration, right=right, strike=float(strike),
@@ -78,6 +78,7 @@ async def load_snapshot_for(
         ))
         bid.append(np.nan if b is None else float(b))
         ask.append(np.nan if a is None else float(a))
+        mark.append(np.nan if mark_v is None else float(mark_v))
         iv.append(np.nan if iv_v is None else float(iv_v))
         volume.append(float(vol or 0))
         oi.append(float(oi_map.get(cid, np.nan)))
@@ -90,7 +91,7 @@ async def load_snapshot_for(
 
     snap = enrich(
         refs=refs, now=ts, spot=spot_value,
-        bid=np.array(bid), ask=np.array(ask),
+        bid=np.array(bid), ask=np.array(ask), stored_mark=np.array(mark),
         stored_iv=np.array(iv), volume=np.array(volume), open_interest=np.array(oi),
         dividend_yield=float(underlying.dividend_yield or 0.0),
     )

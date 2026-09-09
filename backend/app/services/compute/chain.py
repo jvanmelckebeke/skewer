@@ -71,6 +71,7 @@ def enrich(
     spot: float,
     bid: np.ndarray,
     ask: np.ndarray,
+    stored_mark: np.ndarray | None = None,
     stored_iv: np.ndarray | None = None,
     volume: np.ndarray | None = None,
     open_interest: np.ndarray | None = None,
@@ -82,6 +83,13 @@ def enrich(
     ``stored_iv`` short-circuits the solve for rows that already carry a
     persisted IV — the normal read path, since the collector solved it once at
     ingest. Rows without one (an ephemeral, un-persisted fetch) are solved here.
+
+    ``stored_mark`` works the same way, and for a sharper reason. Recomputing
+    the mark here means recomputing it from bid and ask alone, and Eurex
+    publishes no order book: both are NULL for every European contract, so a
+    recomputed mark is NaN across the whole chain. The collector's own
+    ``_marks`` falls back to the exchange settlement, and the stored column is
+    the result. Reading it back is the only way this side agrees with it.
     """
     n = len(refs)
     rate = settings.risk_free_rate if rate is None else rate
@@ -90,7 +98,15 @@ def enrich(
     is_call = np.array([r.right is Right.CALL for r in refs], dtype=bool)
     phi = np.where(is_call, bs.CALL, bs.PUT)
 
-    mark = mid_price(bid, ask)
+    # Recompute only what was not handed to us. A stored NaN is a real answer
+    # (no quote and no settlement) and is left alone; the fallback is for a
+    # caller that has no stored column at all.
+    computed = mid_price(bid, ask)
+    if stored_mark is None:
+        mark = computed
+    else:
+        stored = np.asarray(stored_mark, dtype=float)
+        mark = np.where(np.isfinite(stored), stored, computed)
 
     if stored_iv is None:
         res = implied_vol(mark, spot, strike, tenor, rate, dividend_yield, phi)
