@@ -57,8 +57,10 @@ export function CollectionHealth() {
       <CardHeader>
         <CardTitle>Collection health</CardTitle>
         <CardDescription>
-          One row per tracked underlying, anything wrong first. Stale means the market is open and
-          nothing has been polled for over 15 minutes, which is three missed base-cadence slots.
+          One row per tracked underlying, anything wrong first. Stale means the session has been
+          open for over 15 minutes and nothing has been polled in that time, which is three missed
+          base-cadence slots. Measuring from the open rather than from the last poll alone is what
+          stops every row flagging at 09:31, when the most recent poll is always yesterday's.
           Catalogued counts every contract ever seen, expired ones included, because the dimension
           table is the record of what exists rather than of what was sampled.
         </CardDescription>
