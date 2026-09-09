@@ -25,7 +25,12 @@ services:
       retries: 5
 
   backend:
-    build: ./backend
+    build:
+      context: ./backend
+      # The dev stage carries pytest, ruff and aiosqlite, so the commands in
+      # CLAUDE.md work in a plain `docker compose up` without a pip install
+      # inside the running container after every rebuild.
+      target: dev
     restart: unless-stopped
     environment:
       DATABASE_URL: postgresql+asyncpg://skewer:skewer@db:5432/skewer

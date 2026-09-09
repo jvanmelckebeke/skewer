@@ -42,18 +42,20 @@ docker compose -f docker-compose.yaml -f docker-compose.dev.yml up frontend
 ## Commands
 
 ```bash
-# The image installs requirements.txt only, so pytest/ruff are not in it.
-# Once per container: pip install -r requirements-dev.txt
-docker compose exec backend python -m pytest
-docker compose exec backend python -m pytest tests/test_pricing.py -k iv
-docker compose exec backend python -m ruff check app/
+docker compose exec backend pytest
+docker compose exec backend pytest tests/test_pricing.py -k iv
+docker compose exec backend ruff check app/ tests/
 
 # Collection-path tests need PostgreSQL (ON CONFLICT upserts; SQLite can't):
 SKEWER_TEST_DATABASE_URL=postgresql+asyncpg://skewer:skewer@db:5432/skewer_test pytest
 ```
 
-Tests default to SQLite in-memory and skip the ~9 collection tests without that
-env var. Both paths must pass.
+Tests default to SQLite in-memory and skip the ~20 collection tests without
+that env var. Both paths must pass.
+
+`docker-compose.yaml` builds the backend's `dev` stage, which is where pytest,
+ruff and aiosqlite live. A build with no target stops at `runtime` and carries
+none of them, so deploying does not ship the test tooling.
 
 ## Architecture
 
