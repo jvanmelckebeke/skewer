@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/select"
 import { useContractSeries } from "@/hooks/queries"
 import { formatDate, formatTimestamp, integer, money, percent } from "@/lib/format"
+import type { ContractSeriesResponse } from "@/types"
 
 const WINDOWS = [1, 5, 15, 30, 90]
 
@@ -55,6 +56,7 @@ export function ContractPage() {
                 {formatDate(series.data.expiration)}
               </h1>
               <p className="font-mono text-sm text-muted-foreground">{series.data.symbol}</p>
+              <AdjustmentNote series={series.data} />
             </div>
 
             <Select value={String(days)} onValueChange={setDays}>
@@ -87,5 +89,50 @@ export function ContractPage() {
         </>
       )}
     </div>
+  )
+}
+
+/**
+ * Says when a contract's history has a boundary the chart cannot cross.
+ *
+ * Eurex adjusts terms after a corporate action and issues a new ISIN, so the
+ * position continues in a different contract. The two series are not joined,
+ * because a strike of 92 on 100 shares and one of 91.49 on 101 are not points
+ * on the same line. Linking to the neighbour is the honest alternative to
+ * stitching them.
+ */
+function AdjustmentNote({ series }: { series: ContractSeriesResponse }) {
+  const { version_nr, original_strike, supersedes, superseded_by } = series
+  if (!version_nr && !supersedes && !superseded_by) return null
+
+  return (
+    <p className="mt-1 text-sm text-muted-foreground">
+      {version_nr ? (
+        <>
+          Adjusted by a corporate action
+          {original_strike === null ? null : <> from a strike of {money(original_strike)}</>}.{" "}
+        </>
+      ) : null}
+      {supersedes ? (
+        <>
+          Continues{" "}
+          <Link to={`/contracts/${supersedes}`} className="font-mono underline">
+            {supersedes}
+          </Link>
+          .{" "}
+        </>
+      ) : null}
+      {superseded_by ? (
+        <>
+          Continued by{" "}
+          <Link to={`/contracts/${superseded_by}`} className="font-mono underline">
+            {superseded_by}
+          </Link>
+          .{" "}
+        </>
+      ) : null}
+      History before the adjustment is on the other contract; the two are not
+      one series.
+    </p>
   )
 }

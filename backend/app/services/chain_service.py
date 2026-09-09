@@ -272,6 +272,9 @@ async def contract_series(
             OptionContract.expiration,
             OptionContract.strike,
             OptionContract.right,
+            OptionContract.version_nr,
+            OptionContract.original_strike,
+            OptionContract.supersedes_contract_id,
         ).where(OptionContract.symbol == key)
     )
     row = result.first()
@@ -285,27 +288,64 @@ async def contract_series(
                 OptionContract.expiration,
                 OptionContract.strike,
                 OptionContract.right,
+                OptionContract.version_nr,
+                OptionContract.original_strike,
+                OptionContract.supersedes_contract_id,
             ).where(OptionContract.symbol == key.upper())
         )
         row = result.first()
     if row is None:
         raise HTTPException(404, f"Contract {key} is not tracked")
-    cid, stored_symbol, expiration, strike, right = row
+    (cid, stored_symbol, expiration, strike, right,
+     version_nr, original_strike, supersedes_id) = row
 
     end = datetime.now(tz=timezone.utc)
     start = end - timedelta(days=days)
     rows = await QuoteRepository(db).series_for_contract(cid, start, end)
+
+    # The neighbours across a corporate action, by symbol so a client can
+    # follow them. The series itself stops at this contract's own rows: a
+    # price struck at 92 on 100 shares and one struck at 91.49 on 101 are not
+    # points on the same line, and joining them would draw the adjustment as
+    # a market move.
+    supersedes = await _symbol_of(db, supersedes_id)
+    superseded_by = (
+        await db.execute(
+            select(OptionContract.symbol).where(
+                OptionContract.supersedes_contract_id == cid
+            )
+        )
+    ).scalars().first()
+
     return {
         "symbol": stored_symbol,
         "expiration": expiration,
         "strike": float(strike),
         "right": right.value,
+        "version_nr": version_nr,
+        "original_strike": float(original_strike) if original_strike is not None else None,
+        "supersedes": supersedes,
+        "superseded_by": superseded_by,
         "points": [
             {"ts": ts, "mark": _f(mark), "bid": _f(b), "ask": _f(a),
              "iv": _f(iv), "spot": _f(spot), "volume": int(vol or 0)}
             for ts, mark, b, a, iv, spot, vol in rows
         ],
     }
+
+
+async def _symbol_of(db: AsyncSession, contract_id: int | None) -> str | None:
+    """One contract's key, or None. Used for the adjustment links."""
+    from sqlalchemy import select
+
+    from app.models import OptionContract
+
+    if contract_id is None:
+        return None
+    result = await db.execute(
+        select(OptionContract.symbol).where(OptionContract.id == contract_id)
+    )
+    return result.scalars().first()
 
 
 async def session_profile(

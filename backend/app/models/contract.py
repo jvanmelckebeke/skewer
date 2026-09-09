@@ -44,6 +44,11 @@ class OptionContract(Base):
         Index("ix_contract_underlying_exp", "underlying_id", "expiration", "strike"),
         # Cadence bucketing scans by expiry across all underlyings.
         Index("ix_contract_expiration", "expiration"),
+        # The predecessor lookup for an adjusted Eurex contract.
+        Index(
+            "ix_contract_adjustment_match",
+            "underlying_id", "expiration", "right", "strike", "generation_nr",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -101,6 +106,29 @@ class OptionContract(Base):
     # sizing, so it is recorded rather than assumed.
     contract_size: Mapped[int] = mapped_column(Integer, default=100, server_default="100")
     currency: Mapped[str] = mapped_column(String(10), default="USD", server_default="USD")
+
+    # Corporate actions, on the one venue that publishes them.
+    #
+    # The immutability above is a property of a *contract*, not of a position.
+    # Eurex adjusts terms after a split or a special dividend and issues a new
+    # ISIN, so the adjusted contract is a new row here while the old one keeps
+    # its history. These columns are what make that break visible instead of
+    # silent. Live on SAP: 4 contracts at version 1, strike 91.49 against an
+    # original strike of 92, with a contract size of 101.
+    #
+    # NULL means "the venue does not publish this", which is every OCC row.
+    version_nr: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    generation_nr: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    original_strike: Mapped[float | None] = mapped_column(
+        Numeric(14, 4, asdecimal=False), nullable=True
+    )
+    # The row this one replaced, when exactly one candidate matched. Series
+    # reads do **not** stitch across it: a price at strike 92 on 100 shares
+    # and one at 91.49 on 101 are not the same number, and concatenating them
+    # would render a corporate action as a market move.
+    supersedes_contract_id: Mapped[int | None] = mapped_column(
+        ForeignKey("option_contracts.id", ondelete="SET NULL"), nullable=True
+    )
 
     first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

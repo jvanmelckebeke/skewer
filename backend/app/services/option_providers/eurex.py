@@ -89,6 +89,8 @@ _CONTRACT_FIELDS = """
     SettlementType
     ContractSize
     VersionNr
+    GenerationNr
+    OriginalStrike
     ExpirationDate
     LastTradingDate
     PreviousDaySettlementPrice
@@ -155,6 +157,16 @@ def _num(value) -> float | None:
     except (TypeError, ValueError):
         return None
     return f if f >= 0.0 else None
+
+
+def _int(value) -> int | None:
+    """A feed integer, or None. VersionNr 0 is a real answer, not an absence."""
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _date(value) -> date | None:
@@ -438,6 +450,13 @@ class EurexOptionProvider(OptionProvider):
             contract_size=ref.contract_size,
             currency=ref.currency,
             settlement=settlement,
+            # Corporate actions. VersionNr is 0 on an unadjusted contract and
+            # OriginalStrike then equals Strike; both are carried anyway, so
+            # the day one of them moves the record is already there rather
+            # than starting from the adjustment.
+            version_nr=_int(row.get("VersionNr")),
+            generation_nr=_int(row.get("GenerationNr")),
+            original_strike=_num(row.get("OriginalStrike")),
         )
 
     async def _session_close(self, symbol: str, on: date) -> float | None:

@@ -54,6 +54,13 @@ class RawOptionQuote:
     # nothing downstream can mistake it for a book that was never there.
     settlement: float | None = None
 
+    # Corporate-action metadata, where the venue publishes it. Eurex does;
+    # OCC and Euronext leave these None. ``original_strike`` is the strike
+    # before adjustment and is what identifies the contract this one replaced.
+    version_nr: int | None = None
+    generation_nr: int | None = None
+    original_strike: float | None = None
+
 
 @dataclass(frozen=True, slots=True)
 class RawChain:

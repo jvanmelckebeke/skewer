@@ -2,9 +2,10 @@ import logging
 from collections.abc import Iterator
 from datetime import date, datetime
 
-from sqlalchemy import select
+from sqlalchemy import and_, func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from app.domain.contracts import ContractRef
 from app.models import OptionContract
@@ -90,11 +91,11 @@ class ContractRepository:
         time for OCC) rather than an update to apply.
 
         Eurex's ``VersionNr`` is the one thing that genuinely can change a
-        contract's terms, when a corporate action adjusts them. It is not
-        handled yet: an adjusted contract keeps a distinct ISIN, so it arrives
-        here as a *new* row rather than as a mutation of the old one, which is
-        wrong in a subtle way — the two are economically the same position.
-        Tracked as a known gap rather than silently patched over.
+        contract's terms, when a corporate action adjusts them. The adjusted
+        contract keeps a distinct ISIN, so it still arrives here as a new row.
+        What is no longer lost is the link back: the version columns are
+        stored, and :meth:`link_adjusted` joins the new row to the one it
+        replaced. See that method for why it refuses an ambiguous match.
         """
         if not refs:
             return {}
@@ -110,6 +111,9 @@ class ContractRepository:
                 "right": r.ref.right,
                 "contract_size": r.contract_size,
                 "currency": r.currency,
+                "version_nr": getattr(r, "version_nr", None),
+                "generation_nr": getattr(r, "generation_nr", None),
+                "original_strike": getattr(r, "original_strike", None),
                 "first_seen_at": seen_at,
                 "last_seen_at": seen_at,
             }
@@ -120,13 +124,112 @@ class ContractRepository:
             stmt = pg_insert(OptionContract).values(chunk)
             stmt = stmt.on_conflict_do_update(
                 index_elements=["symbol"],
-                set_={"last_seen_at": stmt.excluded.last_seen_at},
+                set_={
+                    "last_seen_at": stmt.excluded.last_seen_at,
+                    # Refreshed rather than left alone, unlike the terms. A
+                    # contract's own version never changes (an adjustment
+                    # issues a new ISIN), so this only ever fills in rows
+                    # stored before the columns existed.
+                    "version_nr": stmt.excluded.version_nr,
+                    "generation_nr": stmt.excluded.generation_nr,
+                    "original_strike": stmt.excluded.original_strike,
+                },
             )
             await self.db.execute(stmt)
         await self.db.commit()
 
+        # Only worth a query when the venue publishes versions at all and one
+        # of them is non-zero, which on live data is 4 contracts out of 1,288
+        # on SAP and none at all on any other product tested.
+        if any((getattr(r, "version_nr", None) or 0) > 0 for r in refs):
+            await self.link_adjusted(underlying_id)
+
         symbols = [r.ref.symbol for r in refs]
         return await self.ids_for(symbols)
+
+    async def link_adjusted(self, underlying_id: int) -> int:
+        """Point each adjusted contract at the row it replaced.
+
+        A corporate action gives the contract a new ISIN, a new strike and
+        sometimes a new contract size. What identifies its predecessor is
+        ``OriginalStrike``: the adjusted SAP contract carries strike 91.49 and
+        original strike 92, and the row it replaced was struck at 92.
+
+        Matching on the original strike alone is not enough. Eurex also lists
+        *fresh* contracts at round strikes, so a live unadjusted contract at
+        92 would match just as well. ``GenerationNr`` separates them: on SAP
+        the adjusted contracts sit at generation 7 while every unadjusted one
+        is at generation 8, so the predecessor is the row at the same
+        generation and one version lower.
+
+        That generation rule is read off live data, not off documentation, so
+        it is applied conservatively: a match is only written when exactly one
+        candidate exists. Two candidates, or none, leaves the link NULL, which
+        is the same state as "this contract was never adjusted" and reads the
+        same way — as no claim rather than a wrong one.
+
+        Returns the number of links written.
+        """
+        newer = aliased(OptionContract)
+        older = aliased(OptionContract)
+
+        # Candidates, grouped so ambiguity can be detected before writing.
+        pairs = (
+            select(
+                newer.id.label("new_id"),
+                func.min(older.id).label("old_id"),
+                func.count(older.id).label("matches"),
+            )
+            .join(
+                older,
+                and_(
+                    older.underlying_id == newer.underlying_id,
+                    older.expiration == newer.expiration,
+                    older.right == newer.right,
+                    older.strike == newer.original_strike,
+                    older.generation_nr == newer.generation_nr,
+                    older.version_nr == newer.version_nr - 1,
+                    older.id != newer.id,
+                ),
+            )
+            .where(
+                newer.underlying_id == underlying_id,
+                newer.version_nr > 0,
+                newer.supersedes_contract_id.is_(None),
+                newer.original_strike.is_not(None),
+                newer.generation_nr.is_not(None),
+            )
+            .group_by(newer.id)
+            .subquery()
+        )
+
+        ambiguous = await self.db.execute(
+            select(func.count()).select_from(pairs).where(pairs.c.matches > 1)
+        )
+        count = int(ambiguous.scalar_one())
+        if count:
+            logger.warning(
+                "%d adjusted contracts on underlying %d matched more than one "
+                "predecessor; leaving them unlinked",
+                count, underlying_id,
+            )
+
+        result = await self.db.execute(
+            update(OptionContract)
+            .where(
+                OptionContract.id == pairs.c.new_id,
+                pairs.c.matches == 1,
+            )
+            .values(supersedes_contract_id=pairs.c.old_id)
+        )
+        await self.db.commit()
+        written = int(result.rowcount or 0)
+        if written:
+            logger.info(
+                "Linked %d adjusted contracts to their predecessors on underlying %d",
+                written, underlying_id,
+            )
+        return written
 
     async def ids_for(self, symbols: list[str]) -> dict[str, int]:
         """Map contract symbols to contract ids, chunked to stay under the
@@ -143,8 +246,6 @@ class ContractRepository:
         return out
 
     async def count_for(self, underlying_id: int, live_on: date | None = None) -> int:
-        from sqlalchemy import func
-
         stmt = select(func.count()).select_from(OptionContract).where(
             OptionContract.underlying_id == underlying_id
         )

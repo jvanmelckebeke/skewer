@@ -130,10 +130,35 @@ class ContractSeriesPoint(BaseModel):
 
 
 class ContractSeriesResponse(BaseModel):
+    """One contract's history, and nothing else's.
+
+    A corporate action adjusts a Eurex contract's terms and issues it a new
+    ISIN, so the position continues in a different row. ``supersedes`` and
+    ``superseded_by`` name those rows; ``points`` deliberately does not
+    include them. Concatenating a series across a strike change from 92 to
+    91.49 and a size change from 100 to 101 would draw the adjustment as a
+    price move, which is exactly the kind of plausible-looking wrong number
+    this codebase refuses elsewhere.
+    """
+
     symbol: str = Field(..., description="The contract's key: an OCC symbol, or a venue-prefixed one such as EUX:<ISIN>.")
     expiration: date
     strike: float
     right: str
+
+    version_nr: int | None = Field(
+        None, description="Eurex adjustment version. 0 is unadjusted; NULL means the venue does not publish it."
+    )
+    original_strike: float | None = Field(
+        None, description="The strike before adjustment, where the venue publishes it."
+    )
+    supersedes: str | None = Field(
+        None, description="The contract this one replaced after a corporate action."
+    )
+    superseded_by: str | None = Field(
+        None, description="The contract that replaced this one after a corporate action."
+    )
+
     points: list[ContractSeriesPoint]
 
 

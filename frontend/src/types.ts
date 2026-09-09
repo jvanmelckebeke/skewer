@@ -146,6 +146,17 @@ export interface ContractSeriesResponse {
   expiration: string
   strike: number
   right: Right
+  /** Eurex adjustment version. 0 is unadjusted; null where the venue publishes none. */
+  version_nr: number | null
+  /** The strike before adjustment, where the venue publishes it. */
+  original_strike: number | null
+  /**
+   * The contracts on either side of a corporate action. `points` covers this
+   * contract only: the terms differ across the boundary, so the two series
+   * are not one line.
+   */
+  supersedes: string | null
+  superseded_by: string | null
   points: ContractSeriesPoint[]
 }
 

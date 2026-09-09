@@ -311,10 +311,17 @@ IV 37.5%.
   options and skewer prices them European. That predates Eurex — US listed
   options are American too — but Eurex makes it visible by publishing
   `ExerciseStyle` per contract. The field is stored and dispatched on nowhere.
-- **`VersionNr` is ignored.** A corporate action adjusts a Eurex contract's
-  terms and issues a new ISIN, so the adjusted contract arrives as a new row
-  rather than as a version of the old one. The dimension table's immutability
-  assumption does not hold on this venue.
+- **A corporate action breaks the dimension table's immutability, and the break
+  is recorded rather than hidden.** Eurex adjusts terms and issues a new ISIN,
+  so the adjusted contract is still a new row. `version_nr`, `generation_nr`
+  and `original_strike` are stored, and `ContractRepository.link_adjusted`
+  points the new row at the one it replaced by matching expiry, right,
+  `original_strike` and generation. An ambiguous match writes nothing, because
+  NULL and "never adjusted" read the same way and a wrong link does not.
+  **Series reads do not stitch across the boundary** — 92 on 100 shares and
+  91.49 on 101 are not points on one line — the API returns `supersedes` /
+  `superseded_by` and the contract page links them. Live: SAP has 4 adjusted
+  contracts out of 1,288; every other product tested is entirely at version 0.
 - **No open interest.** It is a fee-based Eurex file, so `option_daily_stats`
   gets NULL rather than a number for European names.
 
