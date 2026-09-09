@@ -32,10 +32,13 @@ export function SummaryTable({
   rows,
   emptyTitle = "Nothing here yet",
   emptyDescription,
+  membership,
 }: {
   rows: ChainSummaryRow[]
   emptyTitle?: string
   emptyDescription?: string
+  /** Set on a group page so the row menu can offer to remove membership. */
+  membership?: { groupId: number; groupName: string; idBySymbol: Map<string, number> }
 }) {
   const descriptors = useMetricDescriptors()
   const byId = new Map((descriptors.data ?? []).map((metric) => [metric.id, metric]))
@@ -119,7 +122,19 @@ export function SummaryTable({
                   ))}
                 </TableRow>
               </ContextMenuTrigger>
-              <UnderlyingActions symbol={row.symbol} isActive={row.is_active} />
+              <UnderlyingActions
+                symbol={row.symbol}
+                isActive={row.is_active}
+                membership={
+                  membership && membership.idBySymbol.has(row.symbol)
+                    ? {
+                        groupId: membership.groupId,
+                        groupName: membership.groupName,
+                        underlyingId: membership.idBySymbol.get(row.symbol)!,
+                      }
+                    : undefined
+                }
+              />
             </ContextMenu>
           )
         })}

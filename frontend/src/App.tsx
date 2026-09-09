@@ -3,6 +3,7 @@ import { Navigate, Route, Routes } from "react-router-dom"
 import { AppShell } from "@/components/layout/AppShell"
 import { ChainPage } from "@/pages/ChainPage"
 import { ContractPage } from "@/pages/ContractPage"
+import { GroupDetailPage } from "@/pages/GroupDetailPage"
 import { GroupsPage } from "@/pages/GroupsPage"
 import { OverviewPage } from "@/pages/OverviewPage"
 import { SystemPage } from "@/pages/SystemPage"
@@ -15,6 +16,7 @@ export function App() {
         <Route path="chains/:symbol" element={<ChainPage />} />
         <Route path="contracts/:occSymbol" element={<ContractPage />} />
         <Route path="groups" element={<GroupsPage />} />
+        <Route path="groups/:id" element={<GroupDetailPage />} />
         <Route path="system" element={<SystemPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
