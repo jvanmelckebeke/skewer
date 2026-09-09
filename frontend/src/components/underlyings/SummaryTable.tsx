@@ -1,4 +1,4 @@
-import { Link } from "react-router-dom"
+import { Link, useNavigate } from "react-router-dom"
 
 import { EmptyState } from "@/components/common/States"
 import { Badge } from "@/components/ui/badge"
@@ -40,6 +40,7 @@ export function SummaryTable({
   /** Set on a group page so the row menu can offer to remove membership. */
   membership?: { groupId: number; groupName: string; idBySymbol: Map<string, number> }
 }) {
+  const navigate = useNavigate()
   const descriptors = useMetricDescriptors()
   const byId = new Map((descriptors.data ?? []).map((metric) => [metric.id, metric]))
 
@@ -79,7 +80,16 @@ export function SummaryTable({
           return (
             <ContextMenu key={row.symbol}>
               <ContextMenuTrigger asChild>
-                <TableRow>
+                {/*
+                  The row navigates, and the symbol stays an anchor inside it.
+                  Dropping the anchor for a plain span would cost middle-click
+                  and open-in-new-tab, which is the one thing a table of
+                  symbols is used for.
+                */}
+                <TableRow
+                  className="cursor-pointer"
+                  onClick={() => navigate(`/chains/${row.symbol}`)}
+                >
                   <TableCell>
                     <div className="flex items-center gap-2">
                       <Link
