@@ -108,17 +108,6 @@ class ContractRef:
 
         return build_occ(root, expiration, right, strike)
 
-    @property
-    def occ_symbol(self) -> str:
-        """Backwards-compatible alias.
-
-        A great deal of code, and the ``option_contracts.symbol`` column's
-        former name, called this ``occ_symbol``. Keeping the alias means the
-        Eurex work did not have to rename every call site in one commit. It is
-        only meaningful when ``venue is Venue.OCC``.
-        """
-        return self.symbol
-
     def expires_at(self) -> datetime:
         """The contract's expiry instant, timezone-aware.
 

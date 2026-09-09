@@ -101,7 +101,9 @@ would write the same integer ~78 times a session.
   also *validates*: provider strike/expiry are cross-checked against the symbol
   at ingest. **No other venue gives this for free** — a Eurex ISIN encodes
   nothing, so its terms are believed rather than checked.
-- `domain/eurex.py` — Eurex identity. Contracts are keyed `EUX:` + ISIN.
+- `domain/eurex.py` — Eurex identity. Contracts are keyed `EUX:` + ISIN. The
+  key is called `symbol` everywhere: the column, the `ContractRef`, the API
+  response and `src/types.ts`. It is an OCC symbol only on the OCC venue.
 - `domain/euronext.py` — Euronext identity, keyed `XNT:<EXCODE>:<identifier>`.
   The prefixes are what make the three namespaces provably non-colliding in the
   one unique index they share.
@@ -307,8 +309,6 @@ IV 37.5%.
   assumption does not hold on this venue.
 - **No open interest.** It is a fee-based Eurex file, so `option_daily_stats`
   gets NULL rather than a number for European names.
-- **The API field is still called `occ_symbol`.** It now carries Eurex keys too.
-  Renaming it is a frontend change as well as a backend one.
 
 ## Euronext (the third venue) — written to spec, never run
 

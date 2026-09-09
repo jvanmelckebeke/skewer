@@ -125,7 +125,7 @@ def to_contract_quotes(snap: ChainSnapshot, rows: list[tuple], on: date) -> list
         (_cid, _sym, _venue, _exp, _strike, _right, _style, _size, _ccy,
          b, a, mark, last, last_trade_at, vol, _spot, _iv, ivp, status) = rows[i]
         out.append({
-            "occ_symbol": ref.occ_symbol,
+            "symbol": ref.symbol,
             "expiration": ref.expiration,
             "strike": ref.strike,
             "right": ref.right.value,
@@ -296,10 +296,7 @@ async def contract_series(
     start = end - timedelta(days=days)
     rows = await QuoteRepository(db).series_for_contract(cid, start, end)
     return {
-        # Wire name kept as occ_symbol for frontend compatibility even though
-        # it now carries Eurex keys too. Renaming it is a frontend change as
-        # well as a backend one, so it is deliberately not bundled here.
-        "occ_symbol": stored_symbol,
+        "symbol": stored_symbol,
         "expiration": expiration,
         "strike": float(strike),
         "right": right.value,
@@ -390,7 +387,7 @@ async def session_profile(
         "available_expirations": expirations,
         "points": [
             {
-                "occ_symbol": occ,
+                "symbol": occ,
                 "strike": float(strike),
                 "right": right.value if hasattr(right, "value") else str(right),
                 "samples": int(samples),

@@ -104,7 +104,7 @@ function SideCells({
     </TableCell>,
     <TableCell key="mark" className="text-right tabular-nums">
       {contract ? (
-        <Link to={`/contracts/${contract.occ_symbol}`} className="font-medium hover:underline">
+        <Link to={`/contracts/${contract.symbol}`} className="font-medium hover:underline">
           {money(contract.mark)}
         </Link>
       ) : (

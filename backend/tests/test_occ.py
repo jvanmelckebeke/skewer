@@ -38,7 +38,7 @@ def test_rejects_malformed(occ):
 def test_build_round_trips():
     for occ in ("NVDA260821C00002500", "SPY271217P00450000", "AMD280121C00123500"):
         ref = ContractRef.parse(occ)
-        assert ContractRef.build(ref.root, ref.expiration, ref.right, ref.strike).occ_symbol == occ
+        assert ContractRef.build(ref.root, ref.expiration, ref.right, ref.strike).symbol == occ
 
 
 def test_expiry_is_the_market_close_not_midnight():

@@ -280,7 +280,7 @@ export function SessionRibbonChart({ data }: { data: SessionProfileResponse }) {
       }
       tableColumns={COLUMNS}
       tableRows={rows}
-      tableRowKey={(row) => row.occ_symbol}
+      tableRowKey={(row) => row.symbol}
     >
       {body}
     </ChartCard>

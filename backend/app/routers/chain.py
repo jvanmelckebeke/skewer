@@ -108,13 +108,13 @@ async def get_term_structure(
 
 
 @router.get(
-    "/contracts/{occ_symbol}",
+    "/contracts/{symbol}",
     response_model=ContractSeriesResponse,
     summary="One contract's quote history",
 )
 async def get_contract_series(
-    occ_symbol: str,
+    symbol: str,
     days: int = Query(5, ge=1, le=90, description="Lookback window in days."),
     db: AsyncSession = Depends(get_db),
 ):
-    return await chain_service.contract_series(db, occ_symbol, days=days)
+    return await chain_service.contract_series(db, symbol, days=days)

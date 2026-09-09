@@ -54,7 +54,7 @@ export function ContractPage() {
                 {money(series.data.strike)} {series.data.right === "call" ? "Call" : "Put"} ·{" "}
                 {formatDate(series.data.expiration)}
               </h1>
-              <p className="font-mono text-sm text-muted-foreground">{series.data.occ_symbol}</p>
+              <p className="font-mono text-sm text-muted-foreground">{series.data.symbol}</p>
             </div>
 
             <Select value={String(days)} onValueChange={setDays}>

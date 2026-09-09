@@ -13,7 +13,7 @@ class ContractQuote(BaseModel):
     lie that plots.
     """
 
-    occ_symbol: str
+    symbol: str = Field(..., description="The contract's key: an OCC symbol, or a venue-prefixed one such as EUX:<ISIN>.")
     expiration: date
     strike: float
     right: str
@@ -130,7 +130,7 @@ class ContractSeriesPoint(BaseModel):
 
 
 class ContractSeriesResponse(BaseModel):
-    occ_symbol: str
+    symbol: str = Field(..., description="The contract's key: an OCC symbol, or a venue-prefixed one such as EUX:<ISIN>.")
     expiration: date
     strike: float
     right: str
@@ -146,7 +146,7 @@ class SessionStrikePoint(BaseModel):
     identifiable volatility.
     """
 
-    occ_symbol: str
+    symbol: str = Field(..., description="The contract's key: an OCC symbol, or a venue-prefixed one such as EUX:<ISIN>.")
     strike: float
     right: str
     samples: int = Field(..., description="Slots this contract was captured in.")

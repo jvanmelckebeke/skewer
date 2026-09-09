@@ -70,7 +70,8 @@ export interface Group {
 }
 
 export interface ContractQuote {
-  occ_symbol: string
+  /** The contract's key: an OCC symbol, or venue-prefixed like `EUX:<ISIN>`. */
+  symbol: string
   expiration: string
   strike: number
   right: Right
@@ -140,7 +141,8 @@ export interface ContractSeriesPoint {
 }
 
 export interface ContractSeriesResponse {
-  occ_symbol: string
+  /** The contract's key: an OCC symbol, or venue-prefixed like `EUX:<ISIN>`. */
+  symbol: string
   expiration: string
   strike: number
   right: Right
@@ -172,7 +174,8 @@ export interface CollectionStatus {
 }
 
 export interface SessionStrikePoint {
-  occ_symbol: string
+  /** The contract's key: an OCC symbol, or venue-prefixed like `EUX:<ISIN>`. */
+  symbol: string
   strike: number
   right: Right
   /** Slots this contract was captured in, and how many of those yielded an IV. */
