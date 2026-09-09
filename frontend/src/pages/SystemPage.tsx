@@ -1,3 +1,4 @@
+import { CollectionHealth } from "@/components/collector/CollectionHealth"
 import { ErrorState, LoadingState } from "@/components/common/States"
 import { StatTile } from "@/components/common/StatTile"
 import { Badge } from "@/components/ui/badge"
@@ -48,6 +49,8 @@ export function SystemPage() {
           detail="A disabled job logs why at startup"
         />
       </div>
+
+      <CollectionHealth />
 
       <div className="grid gap-4 xl:grid-cols-2">
         <Card className="gap-4">

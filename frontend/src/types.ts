@@ -6,11 +6,15 @@
 
 export type Right = "call" | "put"
 
+export type Venue = "occ" | "eurex" | "euronext"
+
 export interface Underlying {
   id: number
   symbol: string
   name: string
   currency: string
+  venue: Venue
+  venue_product: string | null
   dividend_yield: number
   dividend_yield_is_manual: boolean
   is_active: boolean

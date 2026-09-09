@@ -1,5 +1,6 @@
 import {
   useMutation,
+  useQueries,
   useQuery,
   useQueryClient,
   type UseQueryOptions,
@@ -51,6 +52,30 @@ export function useUnderlyingStatus(symbol: string | undefined) {
     queryFn: () => api.get<UnderlyingStatus>(`/underlyings/${symbol}/status`),
     enabled: Boolean(symbol),
     refetchInterval: POLL_MS,
+  })
+}
+
+/**
+ * Collection health for many underlyings at once.
+ *
+ * One request per symbol, which is what the API offers: status is a count
+ * query per underlying and there is no batch endpoint for it. Fetching them
+ * here rather than inside each row is what lets the caller sort by staleness,
+ * which needs every result before it can order anything.
+ */
+export function useUnderlyingStatuses(symbols: string[]) {
+  return useQueries({
+    queries: symbols.map((symbol) => ({
+      queryKey: keys.underlyingStatus(symbol),
+      queryFn: () => api.get<UnderlyingStatus>(`/underlyings/${symbol}/status`),
+      refetchInterval: POLL_MS,
+    })),
+    combine: (results) => ({
+      bySymbol: new Map(
+        results.map((result, index) => [symbols[index], result.data] as const),
+      ),
+      isPending: results.some((result) => result.isPending),
+    }),
   })
 }
 
