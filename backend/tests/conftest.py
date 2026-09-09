@@ -15,6 +15,11 @@ import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+# ``app.models`` is imported for its side effect: a mapped class has to have
+# been imported before ``Base.metadata`` knows its table. Without it a test
+# module that happens not to import any model gets an empty schema and fails
+# on "no such table", several frames from the cause.
+import app.models  # noqa: F401
 from app.database import Base, get_db
 
 TEST_DB_URL = os.getenv("SKEWER_TEST_DATABASE_URL", "sqlite+aiosqlite:///:memory:")

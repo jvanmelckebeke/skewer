@@ -122,14 +122,19 @@ async def refresh_contract_catalog() -> None:
     rather than discovering a new LEAPS series mid-session and starting its
     history ragged. On a session day the intraday poll has already done this,
     so this run is a cheap no-op safety net.
+
+    It runs in ``catalog_only`` mode, which upserts the contract dimension and
+    writes no quotes. An earlier version claimed ``full=False`` achieved that
+    on its own, on the theory that no cadence bucket's slot aligns outside the
+    gate. It does not: ``should_persist`` is a pure function of tenor and slot
+    index and knows nothing about market hours, so the 12:30 UTC run stored a
+    frozen pre-market cross-section every day, weekends included. That is 1,169
+    NVDA rows on 2026-09-05.
     """
     now = datetime.now(tz=timezone.utc)
     async with async_session() as db:
         try:
-            # full=False on a closed market persists nothing (no bucket's slot
-            # aligns outside the gate) but still upserts the contract rows,
-            # which is exactly the intent.
-            results = await sync_all(db, full=False, now=now)
+            results = await sync_all(db, catalog_only=True, now=now)
         except Exception:
             logger.exception("Contract catalog refresh failed")
             return

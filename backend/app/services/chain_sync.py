@@ -59,7 +59,7 @@ async def sync_underlying(
     db: AsyncSession, underlying_id: int, symbol: str, dividend_yield: float = 0.0,
     full: bool = False, now: datetime | None = None,
     venue: Venue = Venue.OCC, venue_product: str | None = None,
-    imply_dividends: bool = True,
+    imply_dividends: bool = True, catalog_only: bool = False,
 ) -> SyncResult:
     """Poll one underlying and persist the selected slice of its chain.
 
@@ -98,7 +98,7 @@ async def sync_underlying(
     return await persist_chain(
         db, underlying_id, chain, dividend_yield,
         full=full, now=now, settled=not provider.intraday,
-        imply_dividends=imply_dividends,
+        imply_dividends=imply_dividends, catalog_only=catalog_only,
     )
 
 
@@ -106,6 +106,7 @@ async def persist_chain(
     db: AsyncSession, underlying_id: int, chain: RawChain,
     dividend_yield: float = 0.0, full: bool = False, now: datetime | None = None,
     settled: bool = False, imply_dividends: bool = True,
+    catalog_only: bool = False,
 ) -> SyncResult:
     """Persist an already-fetched chain. Split out so it is testable without
     touching the network — the fetch is the only impure part above.
@@ -117,7 +118,11 @@ async def persist_chain(
 
     ``imply_dividends`` is off when a human has set the yield by hand. That is
     the same provenance rule fibenchi applies to asset type and currency: a
-    measurement never overwrites a stated value."""
+    measurement never overwrites a stated value.
+
+    ``catalog_only`` registers what exists and stores no prices. It is the
+    mode the weekend catalogue refresh needs: a closed market still lists new
+    expirations, but its book is yesterday's, frozen, and mostly zero-bid."""
     now = now or datetime.now(tz=timezone.utc)
     slot = _slot_for(chain, now, settled)
     today = slot.date()
@@ -131,6 +136,14 @@ async def persist_chain(
     before = await contract_repo.count_for(underlying_id)
     ids = await contract_repo.upsert_many(underlying_id, chain.quotes, seen_at=now)
     after = await contract_repo.count_for(underlying_id)
+
+    # 1a. The catalogue path stops here. Everything below stores prices, and
+    #     off-session there are no prices to store — only a stale book that
+    #     would land as a one-slot phantom session every read then has to
+    #     reason around. ``slot`` is None because nothing was observed, which
+    #     also keeps the run from touching ``last_polled_at``.
+    if catalog_only:
+        return SyncResult(chain.symbol, len(chain.quotes), 0, after - before, 0, 0, None)
 
     # 2. Cadence selection. The EOD snapshot takes everything; an intraday tick
     #    takes only the buckets whose slot this is.
@@ -322,7 +335,8 @@ async def _write_daily(
 
 
 async def sync_all(
-    db: AsyncSession, full: bool = False, now: datetime | None = None
+    db: AsyncSession, full: bool = False, now: datetime | None = None,
+    catalog_only: bool = False,
 ) -> list[SyncResult]:
     """Poll every active underlying.
 
@@ -355,7 +369,7 @@ async def sync_all(
             result = await sync_underlying(
                 db, uid, symbol, div, full=full, now=now,
                 venue=venue, venue_product=venue_product,
-                imply_dividends=not manual_div,
+                imply_dividends=not manual_div, catalog_only=catalog_only,
             )
         except Exception:
             logger.warning("Chain sync failed for %s; skipping", symbol, exc_info=True)

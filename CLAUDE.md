@@ -343,15 +343,18 @@ Euronext underlyings at add time, rather than emitting 401s.
   `venue_product` takes a `DBRU:ABI` form since a code can list on several
   markets.
 
-## Known bug: the catalogue job writes quotes off-session
+## The catalogue path stores no prices
 
-`refresh_contract_catalog` says in its own docstring that "full=False on a
-closed market persists nothing", and that is not true. `should_persist` is a
-pure function of tenor and slot index with no market-hours awareness; the
-market-open gate lives only in `poll_chains`. So the 12:30 UTC catalogue run
-persists a full pre-market cross-section every day, weekends included — 1,169
-NVDA rows on 2026-09-05, observed. They are frozen-book rows whose bids are
-mostly zero, and they create one-slot phantom sessions that any "which sessions
-have data" query then has to reason about. The fix is one `is_market_open()`
-guard around the persist, or calling a catalogue-only path that upserts
-contracts without quotes.
+`refresh_contract_catalog` calls `sync_all(catalog_only=True)`, which upserts
+the contract dimension and returns before anything is priced or persisted.
+That mode exists because cataloguing genuinely should run when the market is
+shut, and the book it would find there is yesterday's, frozen and mostly
+zero-bid.
+
+It used to call `sync_all(full=False)` and claim in its docstring that a closed
+market therefore persisted nothing. It did not: `should_persist` is a pure
+function of tenor and slot index and knows nothing about market hours, so the
+12:30 UTC run wrote a full pre-market cross-section every day of the week.
+That is 1,169 NVDA rows on 2026-09-05. Those rows are still in the database; they are
+the one-slot phantom sessions the session-profile picker filters out by slot
+count.
