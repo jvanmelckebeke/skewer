@@ -62,3 +62,4 @@ class UnderlyingStatus(BaseModel):
     last_eod_snapshot_on: date | None
     minutes_since_poll: float | None
     market_open: bool
+    is_stale: bool

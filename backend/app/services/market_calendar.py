@@ -96,6 +96,24 @@ def is_market_open(now: datetime | None = None) -> bool:
     return open_at <= local <= close_at
 
 
+def minutes_since_open(now: datetime | None = None) -> float | None:
+    """How long the session has been open, or None when it is not.
+
+    Exists so "nothing has been polled recently" can be told apart from
+    "nothing was due yet". One minute after the open, the last poll is always
+    yesterday's, and judging that against a fixed window flags every
+    underlying every morning.
+    """
+    local = local_now(now)
+    bounds = session_bounds(local.date())
+    if bounds is None:
+        return None
+    open_at, close_at = bounds
+    if not (open_at <= local <= close_at):
+        return None
+    return (local - open_at).total_seconds() / 60.0
+
+
 def previous_session(day: date) -> date | None:
     """The most recent session on or before ``day``.
 

@@ -14,7 +14,7 @@ from app.repositories.contract_repo import ContractRepository
 from app.repositories.group_repo import GroupRepository
 from app.repositories.quote_repo import QuoteRepository
 from app.repositories.underlying_repo import UnderlyingRepository
-from app.services.market_calendar import is_market_open, local_now
+from app.services.market_calendar import is_market_open, local_now, minutes_since_open
 from app.services.option_providers import for_venue
 
 logger = logging.getLogger(__name__)
@@ -145,6 +145,47 @@ async def delete_underlying(db: AsyncSession, symbol: str) -> None:
     await db.commit()
 
 
+# Three missed base-cadence slots. A shorter window would flag every
+# underlying whose contracts all sit in a slower tenor bucket, which is not a
+# fault but the cadence policy working.
+STALE_AFTER_MINUTES = 15
+
+
+def minutes_since_poll(row: Underlying) -> float | None:
+    """Minutes since this underlying was last polled, or None if it never was.
+
+    Naive timestamps are read as UTC. SQLite hands them back without a tzinfo
+    even though the collector wrote an aware one, and subtracting an aware from
+    a naive datetime raises rather than being merely wrong.
+    """
+    if row.last_polled_at is None:
+        return None
+    polled = row.last_polled_at
+    if polled.tzinfo is None:
+        polled = polled.replace(tzinfo=timezone.utc)
+    return (datetime.now(tz=timezone.utc) - polled).total_seconds() / 60.0
+
+
+def is_stale(row: Underlying, open_for: float | None) -> bool:
+    """Whether collection looks stalled for this underlying.
+
+    ``open_for`` is minutes since the session opened, or None when the market
+    is closed. The caller passes it in so a list of underlyings costs one
+    calendar lookup rather than one per row.
+
+    The window is measured from the later of the last poll and the open.
+    Nothing can be late for a poll that was not due yet, and without that the
+    first fifteen minutes of every session flag every underlying: at 09:31 the
+    most recent poll is always yesterday's.
+    """
+    if not row.is_active:
+        return False
+    if open_for is None or open_for <= STALE_AFTER_MINUTES:
+        return False
+    since = minutes_since_poll(row)
+    return since is None or since > STALE_AFTER_MINUTES
+
+
 async def status(db: AsyncSession, symbol: str) -> dict:
     """Collection health for one underlying."""
     repo = UnderlyingRepository(db)
@@ -158,13 +199,6 @@ async def status(db: AsyncSession, symbol: str) -> dict:
     total = await contract_repo.count_for(row.id)
     last_slot = await QuoteRepository(db).latest_ts(row.id)
 
-    since = None
-    if row.last_polled_at is not None:
-        polled = row.last_polled_at
-        if polled.tzinfo is None:
-            polled = polled.replace(tzinfo=timezone.utc)
-        since = (datetime.now(tz=timezone.utc) - polled).total_seconds() / 60.0
-
     return {
         "symbol": row.symbol,
         "is_active": row.is_active,
@@ -173,6 +207,7 @@ async def status(db: AsyncSession, symbol: str) -> dict:
         "last_polled_at": row.last_polled_at,
         "last_slot": last_slot,
         "last_eod_snapshot_on": row.last_eod_snapshot_on,
-        "minutes_since_poll": since,
+        "minutes_since_poll": minutes_since_poll(row),
         "market_open": is_market_open(),
+        "is_stale": is_stale(row, minutes_since_open()),
     }
