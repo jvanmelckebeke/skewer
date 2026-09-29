@@ -119,6 +119,13 @@ would write the same integer ~78 times a session.
   Every Yahoo request goes through `YahooOptionProvider._call`: 1 s spacing,
   one reused session, and a circuit breaker on "Invalid Crumb". The throttle
   in `yahoo_rate_limit.py` is a copy of fibenchi's, so fix both together.
+- `services/ibkr/` — the client for the shared ibkr-svc gateway (its OpenAPI
+  document is `svc/openapi.json` in the ibkr-gateway repo), and the daily
+  `ibkr_catalog` job that gives each live Eurex contract its `ibkr_con_id`.
+  IBKR has no ISIN for Eurex options, so the link is by terms: (tradingClass
+  minus any `.N` suffix = Eurex product, expiry, strike to 4 dp, right,
+  multiplier), against rows in the latest Deutsche Boerse catalog only. Zero
+  or several candidates write nothing. The job is off without `IBKR_SVC_URL`.
 - `services/chain_sync.py` — fetch → register contracts → cadence-select →
   solve IV → persist. `persist_chain()` is split from `sync_underlying()` so the
   pipeline is testable without a network.

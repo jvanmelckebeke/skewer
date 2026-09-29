@@ -25,6 +25,8 @@ from app.background_tasks.registry import background_task
 from app.config import settings
 from app.database import async_session
 from app.services.chain_sync import sync_all
+from app.services.ibkr.catalog import link_eurex_contracts
+from app.services.ibkr.client import IbkrClient
 
 logger = logging.getLogger(__name__)
 
@@ -136,3 +138,38 @@ async def refresh_contract_catalog() -> None:
     new = sum(r.new_contracts for r in results)
     if new:
         logger.info("Contract catalog: %d newly listed contracts registered", new)
+
+
+def _ibkr_catalog_trigger() -> CronTrigger | None:
+    """Weekday mornings, before Eurex opens. None (disabled) without IBKR_SVC_URL."""
+    if not settings.ibkr_svc_url:
+        return None
+    return CronTrigger(minute="30", hour="5", day_of_week="mon-fri", timezone=timezone.utc)
+
+
+@background_task("ibkr_catalog", trigger=_ibkr_catalog_trigger)
+async def link_ibkr_contracts() -> None:
+    """Match every live Eurex contract to its IBKR conId.
+
+    The IBKR provider can only quote a contract that has one. Contracts listed
+    since yesterday's Deutsche Boerse catalog stay unmatched until tomorrow's
+    run, which is the intended order: skewer's rows come from the venue, and
+    IBKR only supplies the handle to quote them by.
+    """
+    today = datetime.now(tz=timezone.utc).date()
+    async with async_session() as db:
+        try:
+            reports = await link_eurex_contracts(db, IbkrClient(), today)
+        except Exception:
+            logger.exception("IBKR catalog pass failed")
+            return
+    for r in reports:
+        if r.error:
+            logger.warning("IBKR catalog %s (%s): %s", r.symbol, r.product, r.error)
+        else:
+            logger.info(
+                "IBKR catalog %s (%s): %d linked (%d changed), %d rows unmatched, "
+                "%d ambiguous, %d IBKR contracts not in the Eurex catalog",
+                r.symbol, r.product, r.linked, r.written, r.unmatched_rows,
+                r.ambiguous, r.unmatched_ibkr,
+            )

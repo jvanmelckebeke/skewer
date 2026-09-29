@@ -1,6 +1,6 @@
 import logging
 from collections.abc import Iterator
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from sqlalchemy import and_, func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -9,6 +9,7 @@ from sqlalchemy.orm import aliased
 
 from app.domain.contracts import ContractRef
 from app.models import OptionContract
+from app.services.ibkr.matching import CatalogRow
 
 logger = logging.getLogger(__name__)
 
@@ -252,3 +253,51 @@ class ContractRepository:
         if live_on is not None:
             stmt = stmt.where(OptionContract.expiration >= live_on)
         return int((await self.db.execute(stmt)).scalar_one())
+
+    async def catalog_rows(self, underlying_id: int, live_on: date) -> list[CatalogRow]:
+        """The underlying's contracts that the venue's latest catalog listed.
+
+        "Latest" is the day of the newest ``last_seen_at``: a contract the
+        venue stopped listing keeps its old terms and would otherwise stay a
+        match candidate, which is how a superseded Eurex series could claim
+        the conId of its adjusted replacement.
+        """
+        newest = await self.db.scalar(
+            select(func.max(OptionContract.last_seen_at)).where(
+                OptionContract.underlying_id == underlying_id
+            )
+        )
+        if newest is None:
+            return []
+        result = await self.db.execute(
+            select(
+                OptionContract.id, OptionContract.expiration, OptionContract.strike,
+                OptionContract.right, OptionContract.contract_size,
+            ).where(
+                OptionContract.underlying_id == underlying_id,
+                OptionContract.expiration >= live_on,
+                OptionContract.last_seen_at >= newest - timedelta(days=1),
+            )
+        )
+        return [CatalogRow(*row) for row in result.all()]
+
+    async def set_ibkr_con_ids(self, links: dict[int, int]) -> int:
+        """Write ``{contract id: conId}``; returns how many rows changed."""
+        ids = list(links)
+        current: dict[int, int | None] = {}
+        for start in range(0, len(ids), UPSERT_CHUNK_ROWS):
+            result = await self.db.execute(
+                select(OptionContract.id, OptionContract.ibkr_con_id).where(
+                    OptionContract.id.in_(ids[start:start + UPSERT_CHUNK_ROWS])
+                )
+            )
+            current.update(dict(result.all()))
+        changed = [
+            {"id": cid, "ibkr_con_id": con_id}
+            for cid, con_id in links.items()
+            if cid in current and current[cid] != con_id
+        ]
+        if changed:
+            await self.db.execute(update(OptionContract), changed)
+        await self.db.commit()
+        return len(changed)

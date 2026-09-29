@@ -37,6 +37,12 @@ class Settings(BaseSettings):
     eurex_api_key: str = "68cdafd2-c5c1-49be-8558-37244ab4f513"
     eurex_timeout_seconds: float = 30.0
 
+    # --- IBKR (the shared ibkr-svc gateway) --------------------------------
+    # Reached over the external docker network `ibkr`. Empty disables every
+    # IBKR path: no conId matching, no IBKR provider.
+    ibkr_svc_url: str = ""
+    ibkr_timeout_seconds: float = 60.0
+
     # --- Euronext (EWS derivatives web service) ---------------------------
     # Requires a licensed auth key from Euronext London; there is no anonymous
     # mode. With the key unset the provider refuses to poll rather than

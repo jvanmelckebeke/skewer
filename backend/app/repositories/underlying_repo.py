@@ -53,6 +53,12 @@ class UnderlyingRepository:
         await self.db.refresh(row)
         return row
 
+    async def set_ibkr_con_id(self, underlying_id: int, con_id: int) -> None:
+        await self.db.execute(
+            update(Underlying).where(Underlying.id == underlying_id).values(ibkr_con_id=con_id)
+        )
+        await self.db.commit()
+
     async def mark_polled(self, underlying_id: int, at: datetime) -> None:
         await self.db.execute(
             update(Underlying).where(Underlying.id == underlying_id).values(last_polled_at=at)

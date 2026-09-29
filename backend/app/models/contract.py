@@ -1,6 +1,7 @@
 from datetime import date, datetime
 
 from sqlalchemy import (
+    BigInteger,
     Date,
     DateTime,
     Enum,
@@ -10,6 +11,7 @@ from sqlalchemy import (
     Numeric,
     String,
     func,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -48,6 +50,10 @@ class OptionContract(Base):
         Index(
             "ix_contract_adjustment_match",
             "underlying_id", "expiration", "right", "strike", "generation_nr",
+        ),
+        Index(
+            "ix_contract_ibkr_con_id", "ibkr_con_id",
+            unique=True, postgresql_where=text("ibkr_con_id IS NOT NULL"),
         ),
     )
 
@@ -128,6 +134,11 @@ class OptionContract(Base):
     supersedes_contract_id: Mapped[int | None] = mapped_column(
         ForeignKey("option_contracts.id", ondelete="SET NULL"), nullable=True
     )
+
+    # IBKR's handle for this contract, matched by terms because IBKR publishes
+    # no ISIN for Eurex options. A lookup key for the ibkr-svc gateway, never
+    # identity. NULL means unmatched. See services/ibkr/matching.py.
+    ibkr_con_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
 
     first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
