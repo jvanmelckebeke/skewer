@@ -17,7 +17,7 @@ symbology in ``domain/symbology.py``. It must not mean touching pricing.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from enum import Enum
 from zoneinfo import ZoneInfo
 
@@ -89,9 +89,18 @@ class VenueSpec:
     session_open: time
     session_close: time
 
+    # The exchange_calendars name that decides which days are sessions and
+    # when one closes early. The hours above still bound it; see
+    # services/market_calendar.py.
+    calendar: str
+
     currency: str
     default_exercise_style: ExerciseStyle
     default_contract_size: int
+
+    # How far behind the market the venue's intraday feed runs. Polling and
+    # staleness are judged on the feed's clock, now minus this.
+    feed_delay: timedelta = timedelta(0)
 
     def expires_at(self, expiration: date) -> datetime:
         """The timezone-aware expiry instant for a contract on this venue."""
@@ -108,6 +117,7 @@ VENUES: dict[Venue, VenueSpec] = {
         expiry_time=time(16, 0),
         session_open=time(9, 30),
         session_close=time(16, 0),
+        calendar="XNYS",
         currency="USD",
         # US listed equity options are American-style. Stating it explicitly
         # rather than leaving it implied is the point of this field.
@@ -124,6 +134,7 @@ VENUES: dict[Venue, VenueSpec] = {
         expiry_time=time(17, 30),
         session_open=time(9, 0),
         session_close=time(17, 30),
+        calendar="XEUR",
         currency="EUR",
         # Overridden per contract from the feed, which publishes ExerciseStyle
         # directly. This is only the fallback for a row that omits it.
@@ -141,6 +152,7 @@ VENUES: dict[Venue, VenueSpec] = {
         expiry_time=time(17, 30),
         session_open=time(9, 0),
         session_close=time(17, 30),
+        calendar="XAMS",
         # EUR for four of the five markets. Oslo trades in NOK, so this is the
         # default rather than the truth, and the feed's own `instr.currency`
         # overrides it per contract.
