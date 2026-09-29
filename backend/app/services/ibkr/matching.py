@@ -1,4 +1,7 @@
-"""Link skewer's Eurex contracts to IBKR conIds by their terms.
+"""Link skewer's contracts to IBKR conIds by their terms.
+
+Written for and measured on Eurex; the per-venue parts (the trading-class
+suffix, the IBKR exchange) come from ``services/ibkr/venues.py``.
 
 IBKR publishes no ISIN for Eurex options, so the ``EUX:`` + ISIN key cannot be
 looked up there. The terms can: a contract is the tuple
@@ -30,8 +33,6 @@ from datetime import date
 from app.domain.contracts import Right
 from app.services.ibkr.base import ContractInfo
 
-_ADJUSTED_SUFFIX = re.compile(r"\.\d+$")
-
 Key = tuple[str, date, float, str, int]
 
 
@@ -55,12 +56,12 @@ class MatchResult:
     unmatched_ibkr: int = 0
 
 
-def product_code(trading_class: str) -> str:
-    """``SAP.1`` -> ``SAP``: the Eurex product an IBKR trading class belongs to."""
-    return _ADJUSTED_SUFFIX.sub("", trading_class)
+def product_code(trading_class: str, adjusted_suffix: re.Pattern[str]) -> str:
+    """``SAP.1`` -> ``SAP``: the venue product an IBKR trading class belongs to."""
+    return adjusted_suffix.sub("", trading_class)
 
 
-def _ibkr_key(c: ContractInfo) -> Key | None:
+def _ibkr_key(c: ContractInfo, adjusted_suffix: re.Pattern[str]) -> Key | None:
     expiry = c.expiry
     try:
         size = int(float(c.multiplier))
@@ -68,7 +69,7 @@ def _ibkr_key(c: ContractInfo) -> Key | None:
         return None
     if expiry is None or c.right not in ("C", "P"):
         return None
-    return (product_code(c.tradingClass), expiry, round(c.strike, 4), c.right, size)
+    return (product_code(c.tradingClass, adjusted_suffix), expiry, round(c.strike, 4), c.right, size)
 
 
 def _row_key(product: str, row: CatalogRow) -> Key:
@@ -76,11 +77,14 @@ def _row_key(product: str, row: CatalogRow) -> Key:
     return (product, row.expiration, round(float(row.strike), 4), right, int(row.contract_size))
 
 
-def match(product: str, rows: list[CatalogRow], contracts: list[ContractInfo]) -> MatchResult:
-    """Link ``rows`` (one underlying's live Eurex contracts) to ``contracts``."""
+def match(
+    product: str, rows: list[CatalogRow], contracts: list[ContractInfo],
+    adjusted_suffix: re.Pattern[str],
+) -> MatchResult:
+    """Link ``rows`` (one underlying's live contracts) to ``contracts``."""
     ibkr: dict[Key, list[int]] = defaultdict(list)
     for c in contracts:
-        key = _ibkr_key(c)
+        key = _ibkr_key(c, adjusted_suffix)
         if key is not None:
             ibkr[key].append(c.conId)
     stored: dict[Key, list[int]] = defaultdict(list)

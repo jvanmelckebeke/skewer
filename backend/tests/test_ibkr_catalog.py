@@ -1,5 +1,6 @@
 """The daily IBKR catalog pass, end to end against a fake ibkr-svc."""
 
+from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 
 import pytest_asyncio
@@ -7,7 +8,8 @@ import pytest_asyncio
 from app.domain.contracts import Right
 from app.domain.venue import Venue
 from app.services.ibkr.base import ContractInfo
-from app.services.ibkr.catalog import link_eurex_contracts
+from app.services.ibkr.catalog import link_contracts
+from app.services.ibkr.venues import IBKR_VENUES
 
 TODAY = date(2026, 9, 29)
 OCT = date(2026, 10, 16)
@@ -46,9 +48,12 @@ class FakeIbkr:
         return self.chain if under_con_id == BMW_STOCK else []
 
 
-class FakeEurex:
-    async def product_info(self, code):
-        return {"UnderlyingISIN": "DE0005190003", "Currency": "EUR"} if code == "BMW" else None
+async def _isin(product):
+    return ("DE0005190003", "EUR") if product == "BMW" else None
+
+
+# The real Eurex entry, with Deutsche Boerse's ISIN lookup swapped for a fake.
+EUREX = replace(IBKR_VENUES[Venue.EUREX], underlying_isin=_isin)
 
 
 @pytest_asyncio.fixture
@@ -88,7 +93,7 @@ async def _con_ids(db):
 async def test_resolves_the_underlying_then_links_its_contracts(db, bmw):
     client = FakeIbkr()
 
-    [report] = await link_eurex_contracts(db, client, TODAY, eurex=FakeEurex())
+    [report] = await link_contracts(db, client, TODAY, venues=[EUREX])
 
     assert client.resolved == ["DE0005190003"]
     # The listing in the product's currency is verified first, and it is enough.
@@ -101,10 +106,10 @@ async def test_resolves_the_underlying_then_links_its_contracts(db, bmw):
 
 async def test_a_second_pass_changes_nothing_and_skips_resolution(db, bmw):
     client = FakeIbkr()
-    await link_eurex_contracts(db, client, TODAY, eurex=FakeEurex())
+    await link_contracts(db, client, TODAY, venues=[EUREX])
     client.resolved.clear()
 
-    [report] = await link_eurex_contracts(db, client, TODAY, eurex=FakeEurex())
+    [report] = await link_contracts(db, client, TODAY, venues=[EUREX])
 
     assert client.resolved == []
     assert (report.linked, report.written) == (2, 0)
@@ -114,8 +119,41 @@ async def test_an_underlying_whose_catalog_lacks_the_product_stays_unresolved(db
     client = FakeIbkr()
     client.chain = [_ib(301, "SAP", 56.0, "C")]
 
-    [report] = await link_eurex_contracts(db, client, TODAY, eurex=FakeEurex())
+    [report] = await link_contracts(db, client, TODAY, venues=[EUREX])
 
     await db.refresh(bmw)
     assert bmw.ibkr_con_id is None
     assert report.error == "underlying not resolved"
+
+
+# ------------------------------------------------------------ venue data
+
+
+def test_only_eurex_is_enabled_by_default():
+    from app.services.ibkr.venues import enabled_venues
+
+    assert [v.venue for v in enabled_venues()] == [Venue.EUREX]
+
+
+def test_euronext_maps_its_market_to_ibkrs_exchange():
+    euronext = IBKR_VENUES[Venue.EURONEXT]
+
+    assert euronext.product_for("PHIA.AS", None) == ("FTA", "PHIA")
+    assert euronext.product_for("ABI.BR", "DBRU:ABI") == ("BELFOX", "ABI")
+    assert euronext.product_for("EDP.LS", "DLIS:EDP") is None  # Lisbon: unverified
+
+
+async def test_a_venue_without_an_isin_source_needs_a_hand_set_con_id(db, bmw):
+    from app.models.group import group_underlyings
+    from app.repositories.underlying_repo import UnderlyingRepository
+
+    row = await UnderlyingRepository(db).create("PHIA.AS", "Philips", currency="EUR", venue=Venue.EURONEXT)
+    group_id = (await db.execute(group_underlyings.select())).first().group_id
+    await db.execute(group_underlyings.insert().values(group_id=group_id, underlying_id=row.id))
+    await db.commit()
+
+    reports = await link_contracts(db, FakeIbkr(), TODAY, venues=[EUREX, IBKR_VENUES[Venue.EURONEXT]])
+
+    by_symbol = {r.symbol: r for r in reports}
+    assert by_symbol["PHIA.AS"].error == "no underlying ISIN"
+    assert by_symbol["BMW.DE"].linked == 2

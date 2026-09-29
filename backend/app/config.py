@@ -41,6 +41,10 @@ class Settings(BaseSettings):
     # Reached over the external docker network `ibkr`. Empty disables every
     # IBKR path: no conId matching, no IBKR provider.
     ibkr_svc_url: str = ""
+    # Venues whose intraday quotes and conId matching go through IBKR, as
+    # comma-separated venue values. Only Eurex is verified; see
+    # services/ibkr/venues.py.
+    ibkr_venues: str = "eurex"
     # Above ibkr-svc's own 180 s cap on a contract lookup, so its 504 arrives
     # as an answer instead of this client giving up first. An uncached Eurex
     # option catalog takes about 60 s.

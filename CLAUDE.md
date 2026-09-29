@@ -122,8 +122,12 @@ would write the same integer ~78 times a session.
 - `services/ibkr/` — `IbkrGateway` (a Protocol in `base.py`) is what skewer
   asks of IBKR; `HttpIbkrGateway` is the one implementation, against the shared
   ibkr-svc (its OpenAPI document is `svc/openapi.json` in the ibkr-gateway
-  repo), and `get_gateway()` hands it out, None when unconfigured. The daily
-  `ibkr_catalog` job that gives each live Eurex contract its `ibkr_con_id`.
+  repo), and `get_gateway()` hands it out, None when unconfigured. IBKR is a
+  source, not a venue: `venues.py` holds the per-venue IBKR data (option
+  exchange, trading-class suffix, where the underlying ISIN comes from) and
+  `IBKR_VENUES` enables entries, only `eurex` by default. The daily
+  `ibkr_catalog` job gives each live contract on an enabled venue its
+  `ibkr_con_id`.
   IBKR has no ISIN for Eurex options, so the link is by terms: (tradingClass
   minus any `.N` suffix = Eurex product, expiry, strike to 4 dp, right,
   multiplier), against rows in the latest Deutsche Boerse catalog only. Zero
