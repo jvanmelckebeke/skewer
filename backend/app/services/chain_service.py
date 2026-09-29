@@ -10,6 +10,7 @@ from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.occ import ContractRef
+from app.domain.venue import Venue
 from app.repositories.group_repo import GroupRepository
 from app.repositories.quote_repo import QuoteRepository
 from app.repositories.underlying_repo import UnderlyingRepository
@@ -188,10 +189,11 @@ async def chain_summary(db: AsyncSession, group_id: int | None = None) -> list[d
             raise HTTPException(404, f"No group with id {group_id}")
         underlyings = list(group.underlyings)
 
-    # One calendar call for the whole list rather than one per row: it is the
-    # same answer for every underlying at a single instant.
-    market_open = is_market_open()
-    open_for = minutes_since_open()
+    # One calendar call per venue rather than one per row: it is the same
+    # answer for every underlying on a venue at a single instant.
+    venues = {Venue(u.venue) for u in underlyings}
+    market_open = {v: is_market_open(venue=v) for v in venues}
+    open_for = {v: minutes_since_open(venue=v) for v in venues}
 
     rows = []
     for underlying in underlyings:
@@ -204,9 +206,9 @@ async def chain_summary(db: AsyncSession, group_id: int | None = None) -> list[d
             # Carried so the overview can tell a paused or stalled ticker from
             # a healthy one without a status request per row. Both are free
             # here: last_polled_at is already on the row.
-            "market_open": market_open,
+            "market_open": market_open[Venue(underlying.venue)],
             "minutes_since_poll": minutes_since_poll(underlying),
-            "is_stale": is_stale(underlying, open_for),
+            "is_stale": is_stale(underlying, open_for[Venue(underlying.venue)]),
             "ts": None,
             "spot": None,
             "metrics": {mid: None for mid in METRIC_REGISTRY},

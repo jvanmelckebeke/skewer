@@ -6,7 +6,7 @@ run logs and waits for the next trigger, never crashes the scheduler.
 Three jobs, and the split between the first two is the whole capture design:
 
 ``chain_poll``      fires on the base grid and persists the tenor buckets whose
-                    slot it is. Gated on the market actually being open.
+                    slot it is. Gated per venue on its market actually being open.
 ``eod_snapshot``    fires after the close and persists *everything* once,
                     including LEAPS and open interest.
 ``contract_catalog``keeps the contract dimension table fresh over the weekend so
@@ -25,7 +25,6 @@ from app.background_tasks.registry import background_task
 from app.config import settings
 from app.database import async_session
 from app.services.chain_sync import sync_all
-from app.services.market_calendar import is_market_open, local_now, previous_session
 
 logger = logging.getLogger(__name__)
 
@@ -50,16 +49,14 @@ async def poll_chains() -> None:
     """Intraday chain poll on the base grid.
 
     The market-open gate is what makes the adaptive-cadence arithmetic hold:
-    without it the job would run 288 times a day instead of 78, and every
-    off-hours run would store a frozen chain whose bid/ask are all zero — rows
-    that carry no information but do carry storage.
+    without it an underlying would be polled 288 times a day instead of 78,
+    and every off-hours run would store a frozen chain whose bid/ask are all
+    zero — rows that carry no information but do carry storage. The gate is
+    per venue (``only_due``), so the job itself fires on every tick.
     """
-    if not is_market_open():
-        return
-
     async with async_session() as db:
         try:
-            results = await sync_all(db, full=False)
+            results = await sync_all(db, full=False, only_due=True)
         except Exception:
             logger.exception("Chain poll failed")
             return
@@ -96,21 +93,19 @@ async def eod_snapshot() -> None:
     series at all — here they get exactly one, which is genuinely all the
     information a contract that re-quotes twice a day contains.
     """
-    local = local_now()
-    session = previous_session(local.date())
-    if session != local.date():
-        logger.info("EOD snapshot skipped: %s is not a trading session", local.date())
-        return
-
     async with async_session() as db:
         try:
-            results = await sync_all(db, full=True)
+            # Per venue: an underlying is snapshotted only if its own venue
+            # had a session today.
+            results = await sync_all(db, full=True, only_due=True)
         except Exception:
             logger.exception("EOD snapshot failed")
             return
     if results:
         daily = sum(r.daily_rows for r in results)
-        logger.info("EOD snapshot (%s): %s; %d daily rows", session, _summarise(results), daily)
+        logger.info("EOD snapshot: %s; %d daily rows", _summarise(results), daily)
+    else:
+        logger.info("EOD snapshot skipped: no venue had a session today")
 
 
 @background_task("contract_catalog", trigger=CronTrigger(minute="30", hour="12", timezone=timezone.utc))

@@ -36,6 +36,7 @@ from app.services.compute.dividends import (
     yield_per_contract,
 )
 from app.services.compute.iv import IVStatus, implied_vol, mid_price
+from app.services.market_calendar import is_market_open, local_now, previous_session
 from app.services.option_providers import ChainUnavailable, RawChain, for_venue
 
 logger = logging.getLogger(__name__)
@@ -378,9 +379,23 @@ async def _write_daily(
     return await quote_repo.upsert_daily(rows)
 
 
+def _venue_due(venue: Venue | str, full: bool, now: datetime) -> bool:
+    """Whether ``venue`` is due for this run.
+
+    Intraday, its feed must be showing an open session. For the EOD snapshot
+    it must have had a session on its own local date: a US holiday is not a
+    German one, and the reverse.
+    """
+    venue = Venue(venue)
+    if full:
+        today = local_now(now, venue).date()
+        return previous_session(today, venue) == today
+    return is_market_open(now, venue)
+
+
 async def sync_all(
     db: AsyncSession, full: bool = False, now: datetime | None = None,
-    catalog_only: bool = False,
+    catalog_only: bool = False, only_due: bool = False,
 ) -> list[SyncResult]:
     """Poll every active underlying.
 
@@ -388,6 +403,10 @@ async def sync_all(
     work, and the loop continues. One bad ticker must never cost the portfolio
     a collection cycle — the same guarantee fibenchi's ``_persist_symbol``
     provides for its nightly refresh.
+
+    ``only_due`` skips underlyings whose venue is not trading, judged per
+    venue (see :func:`_venue_due`). The scheduled jobs pass it; NVDA and
+    BMW.DE share a cycle but not a session.
     """
     # When the collector last spoke to the feed, which is not the slot the
     # rows landed in: a settlement chain is stamped with the session it was
@@ -406,6 +425,9 @@ async def sync_all(
          bool(u.dividend_yield_is_manual))
         for u in underlyings
     ]
+    if only_due and not catalog_only:
+        due = {v: _venue_due(v, full, polled_at) for v in {t[3] for t in targets}}
+        targets = [t for t in targets if due[t[3]]]
 
     results = []
     for uid, symbol, div, venue, venue_product, manual_div in targets:

@@ -212,7 +212,8 @@ async def status(db: AsyncSession, symbol: str) -> dict:
     if row is None:
         raise HTTPException(404, f"Underlying {symbol.upper()!r} is not tracked")
 
-    today = local_now().date()
+    venue = Venue(row.venue)
+    today = local_now(venue=venue).date()
     contract_repo = ContractRepository(db)
     live = await contract_repo.count_for(row.id, live_on=today)
     total = await contract_repo.count_for(row.id)
@@ -227,6 +228,6 @@ async def status(db: AsyncSession, symbol: str) -> dict:
         "last_slot": last_slot,
         "last_eod_snapshot_on": row.last_eod_snapshot_on,
         "minutes_since_poll": minutes_since_poll(row),
-        "market_open": is_market_open(),
-        "is_stale": is_stale(row, minutes_since_open()),
+        "market_open": is_market_open(venue=venue),
+        "is_stale": is_stale(row, minutes_since_open(venue=venue)),
     }

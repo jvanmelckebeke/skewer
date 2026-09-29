@@ -142,8 +142,13 @@ would write the same integer ~78 times a session.
   Jobs self-register via `@background_task(id=..., trigger=...)`; the lifespan
   schedules `all_tasks()`. **Adding a job never touches `main.py`.** A trigger
   factory returning `None` disables just that job.
-- `services/market_calendar.py` — US-only (`XNYS`) session gate. Fail-safe: if
-  the calendar can't load, fall back to weekday heuristics and keep collecting.
+- `services/market_calendar.py` — per-venue session gate. Each `VenueSpec`
+  names its exchange calendar (`XNYS`, `XEUR`, `XAMS`), which sets the session
+  days; the spec's own hours clip it (XEUR is 08:00-22:00 for futures, Eurex
+  options trade 09:00-17:30). `VenueSpec.feed_delay` shifts the window for a
+  delayed feed. `sync_all(only_due=True)` skips underlyings whose venue is shut.
+  Fail-safe: if the calendar can't load, fall back to weekday heuristics and
+  keep collecting.
 
 ### Units — mixing these is the classic source of wrong-looking greeks
 
