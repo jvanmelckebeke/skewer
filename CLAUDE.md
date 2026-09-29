@@ -116,6 +116,9 @@ would write the same integer ~78 times a session.
 - `services/option_providers/` — `OptionProvider` ABC plus Yahoo (OCC), Eurex
   and Euronext impls, resolved **per underlying by venue**, not by a global
   setting. NVDA and BMW.DE are polled in the same cycle from different feeds.
+  Every Yahoo request goes through `YahooOptionProvider._call`: 1 s spacing,
+  one reused session, and a circuit breaker on "Invalid Crumb". The throttle
+  in `yahoo_rate_limit.py` is a copy of fibenchi's, so fix both together.
 - `services/chain_sync.py` — fetch → register contracts → cadence-select →
   solve IV → persist. `persist_chain()` is split from `sync_underlying()` so the
   pipeline is testable without a network.
