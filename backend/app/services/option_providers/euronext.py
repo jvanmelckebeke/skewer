@@ -57,8 +57,11 @@ from app.domain.venue import Venue, spec_for
 from app.services.option_providers.base import (
     ChainUnavailable,
     OptionProvider,
+    ProviderUnavailable,
     RawChain,
     RawOptionQuote,
+    SpotSource,
+    spot_from,
 )
 
 logger = logging.getLogger(__name__)
@@ -151,7 +154,7 @@ class EuronextOptionProvider(OptionProvider):
     #: The feed has a live order book, unlike Eurex.
     intraday = True
 
-    def __init__(self, spot_source: OptionProvider | None = None) -> None:
+    def __init__(self, spot_source: SpotSource | None = None) -> None:
         self._url = settings.euronext_api_url
         self._auth_key = settings.euronext_auth_key
         self._session_quality = settings.euronext_session_quality
@@ -330,7 +333,7 @@ class EuronextOptionProvider(OptionProvider):
             )
 
         exchange, code = self.product_for(symbol, product)
-        spot_block = await self._spot(symbol)
+        spot_block = await spot_from(self._spot_source, symbol)
         spot = (spot_block or {}).get("spot")
         if not spot:
             raise ChainUnavailable(
@@ -366,10 +369,10 @@ class EuronextOptionProvider(OptionProvider):
             symbol=symbol.upper(),
             name=(spot_block or {}).get("name") or symbol,
             currency=quotes[0].currency,
-            # Euronext serves the instrument and its options from the same
-            # gateway, on the same market. Unlike the Eurex path there is no
-            # second feed to disagree with.
-            spot_currency=quotes[0].currency,
+            # The spot comes from the equity source, not from Euronext, so its
+            # currency is that source's to state. Copying the option's here
+            # would make the mismatch guard compare a value with itself.
+            spot_currency=(spot_block or {}).get("currency"),
             venue=Venue.EURONEXT,
             spot=spot,
             bid=(spot_block or {}).get("bid"),
@@ -499,24 +502,6 @@ class EuronextOptionProvider(OptionProvider):
             settlement=settlement,
         )
 
-    async def fetch_chains(self, symbols: list[str]) -> dict[str, RawChain]:
-        """Sequential across underlyings, concurrent within one.
-
-        One underlying already costs hundreds of requests, so overlapping two
-        of them multiplies a load this gateway has no reason to tolerate.
-        """
-        out: dict[str, RawChain] = {}
-        for symbol in symbols:
-            try:
-                chain = await self.fetch_chain(symbol)
-            except ChainUnavailable:
-                continue
-            except Exception:
-                logger.warning("Euronext chain fetch failed for %s", symbol, exc_info=True)
-                continue
-            out[chain.symbol] = chain
-        return out
-
     async def validate(self, symbol: str, product: str | None = None) -> tuple[bool, str]:
         """Whether the contract code resolves to at least one live option.
 
@@ -528,7 +513,7 @@ class EuronextOptionProvider(OptionProvider):
             return False, ""
 
         exchange, code = self.product_for(symbol, product)
-        spot_block = await self._spot(symbol)
+        spot_block = await spot_from(self._spot_source, symbol)
         spot = (spot_block or {}).get("spot")
         if not spot:
             return False, ""
@@ -549,44 +534,11 @@ class EuronextOptionProvider(OptionProvider):
                     payload = await self._instrument(client, identifier, exchange)
                     if payload is not None:
                         return True, (spot_block or {}).get("name") or symbol
-        except EuronextAPIError:
-            logger.warning("Euronext auth rejected while validating %s", symbol)
-            return False, ""
-        except Exception:
-            logger.warning("Euronext validation failed for %s", symbol, exc_info=True)
-            return False, ""
+        except EuronextAPIError as exc:
+            raise ProviderUnavailable(f"Euronext rejected the auth key: {exc}") from exc
+        except Exception as exc:
+            raise ProviderUnavailable(f"Euronext did not answer for {code!r}: {exc}") from exc
         return False, ""
-
-    async def _spot(self, symbol: str) -> dict | None:
-        """The underlying's quote, from the injected equity source."""
-        if self._spot_source is None:
-            return None
-        getter = getattr(self._spot_source, "fetch_spot", None)
-        if getter is None:
-            return None
-        try:
-            block = await getter(symbol)
-        except Exception:
-            logger.warning("Spot lookup failed for %s", symbol, exc_info=True)
-            return None
-        if not isinstance(block, dict):
-            return None
-
-        def _pos(value):
-            try:
-                f = float(value)
-            except (TypeError, ValueError):
-                return None
-            return f if f > 0 else None
-
-        return {
-            "spot": _pos(block.get("regularMarketPrice")),
-            "bid": _pos(block.get("bid")),
-            "ask": _pos(block.get("ask")),
-            "previous_close": _pos(block.get("regularMarketPreviousClose")),
-            "market_state": block.get("marketState"),
-            "name": block.get("longName") or block.get("shortName"),
-        }
 
 
 __all__ = ["EuronextOptionProvider", "EuronextAPIError"]

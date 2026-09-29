@@ -8,12 +8,16 @@ changes. Same shape as fibenchi's ``PriceProvider``.
 
 from __future__ import annotations
 
+import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import date, datetime
+from typing import Protocol
 
 from app.domain.contracts import ContractRef
 from app.domain.venue import Venue
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,13 +134,28 @@ class OptionProvider(ABC):
         non-US listing, and plenty of US small caps).
         """
 
-    @abstractmethod
     async def fetch_chains(self, symbols: list[str]) -> dict[str, RawChain]:
-        """Fetch chains for several underlyings.
+        """Fetch chains for several underlyings, one at a time.
 
         Symbols that fail are omitted rather than raising, so one bad ticker
-        cannot abort a polling cycle for the rest of the portfolio.
+        cannot abort a polling cycle for the rest of the portfolio. Sequential
+        on purpose: every feed behind this interface is either rate-limited or
+        already fans out within one underlying. A provider that can fetch
+        several symbols in one request (Yahoo) overrides this.
         """
+        out: dict[str, RawChain] = {}
+        for symbol in symbols:
+            try:
+                chain = await self.fetch_chain(symbol)
+            except ChainUnavailable:
+                continue
+            except Exception:
+                logger.warning(
+                    "%s chain fetch failed for %s", self.venue.value, symbol, exc_info=True
+                )
+                continue
+            out[chain.symbol] = chain
+        return out
 
     @abstractmethod
     async def validate(self, symbol: str, product: str | None = None) -> tuple[bool, str]:
@@ -145,6 +164,11 @@ class OptionProvider(ABC):
         Used when adding an underlying, so a user gets an immediate, specific
         rejection ("no listed options") instead of a ticker that silently
         collects nothing.
+
+        ``(False, "")`` means the provider answered and the symbol has no
+        options there. A provider that could not answer at all raises
+        :class:`ProviderUnavailable` instead, because "no options" is a
+        verdict on the symbol and an outage is not.
 
         ``product`` has to be honoured here and not only in ``fetch_chain``:
         validation is what decides whether the row is created, so a provider
@@ -155,3 +179,64 @@ class OptionProvider(ABC):
 
 class ChainUnavailable(Exception):
     """The provider has no option chain for this symbol."""
+
+
+class ProviderUnavailable(Exception):
+    """The provider could not answer: an outage, a rate limit, rejected credentials.
+
+    Says nothing about the symbol, which is the whole difference from
+    :class:`ChainUnavailable`. Adding an underlying while its venue is down
+    must end in "try again later", not in "this ticker has no options".
+    """
+
+
+class SpotSource(Protocol):
+    """Where a venue that publishes no underlying price gets one.
+
+    Eurex and Euronext price derivatives and say nothing about the share, so
+    both borrow the equity quote from Yahoo. ``YahooOptionProvider`` is the
+    implementation.
+    """
+
+    async def fetch_spot(self, symbol: str) -> dict | None:
+        """The underlying's raw quote block (Yahoo /v7 field names), or None."""
+
+    async def fetch_close(self, symbol: str, on: date) -> float | None:
+        """The underlying's close for session ``on``, or the nearest before it."""
+
+
+def _positive(value) -> float | None:
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return None
+    return f if f > 0 else None
+
+
+async def spot_from(source: SpotSource | None, symbol: str) -> dict | None:
+    """The underlying's quote from ``source``, normalised for a ``RawChain``.
+
+    ``currency`` is the spot's own currency as the source reports it. It is
+    what ``RawChain.spot_currency`` must carry: the option's currency comes
+    from the venue, the spot's from here, and the mismatch guard compares the
+    two. A lookup that fails is logged and read as no spot, since a chain can
+    still be stored unpriced.
+    """
+    if source is None:
+        return None
+    try:
+        block = await source.fetch_spot(symbol)
+    except Exception:
+        logger.warning("Spot lookup failed for %s", symbol, exc_info=True)
+        return None
+    if not isinstance(block, dict):
+        return None
+    return {
+        "spot": _positive(block.get("regularMarketPrice")),
+        "currency": (block.get("currency") or "").upper() or None,
+        "bid": _positive(block.get("bid")),
+        "ask": _positive(block.get("ask")),
+        "previous_close": _positive(block.get("regularMarketPreviousClose")),
+        "market_state": block.get("marketState"),
+        "name": block.get("longName") or block.get("shortName"),
+    }

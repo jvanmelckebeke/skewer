@@ -223,6 +223,12 @@ service function and a schema — the router stays thin.
 give it a `venue` and an `intraday` flag, and register it in that package's
 `_PROVIDERS`. Routing is by `underlyings.venue`, so nothing above the registry
 changes. Normalise "no quote" to `None` in the provider — that's the layer's job.
+`validate()` returns `(False, "")` only when the venue answered "no options";
+if it could not answer, raise `ProviderUnavailable` so adding the ticker says
+"try again later". A venue with no spot of its own takes a `SpotSource` and
+reads it through `spot_from()`, which carries the spot's own currency into
+`RawChain.spot_currency`. `fetch_chains` has a sequential default; override it
+only if the feed can fetch several symbols in one request.
 
 **A venue:** add a `VenueSpec` to `domain/venue.py` (expiry instant, session,
 currency), a symbology module alongside `domain/occ.py`, a provider, and a value

@@ -55,8 +55,11 @@ from app.domain.venue import Venue, spec_for
 from app.services.option_providers.base import (
     ChainUnavailable,
     OptionProvider,
+    ProviderUnavailable,
     RawChain,
     RawOptionQuote,
+    SpotSource,
+    spot_from,
 )
 
 logger = logging.getLogger(__name__)
@@ -189,7 +192,7 @@ class EurexOptionProvider(OptionProvider):
     #: No order book in the feed. One settled row per contract per session.
     intraday = False
 
-    def __init__(self, spot_source: OptionProvider | None = None) -> None:
+    def __init__(self, spot_source: SpotSource | None = None) -> None:
         self._url = settings.eurex_graphql_url
         self._api_key = settings.eurex_api_key
         self._timeout = settings.eurex_timeout_seconds
@@ -283,7 +286,7 @@ class EurexOptionProvider(OptionProvider):
         if skipped:
             logger.warning("%s: skipped %d unusable Eurex contract rows", code, skipped)
 
-        spot_block = await self._spot(symbol)
+        spot_block = await spot_from(self._spot_source, symbol)
         fetched_at = datetime.now(tz=timezone.utc)
 
         # The spot must come from the same session as the settlement prices.
@@ -325,33 +328,12 @@ class EurexOptionProvider(OptionProvider):
             spot_currency=(spot_block or {}).get("currency"),
         )
 
-    async def fetch_chains(self, symbols: list[str]) -> dict[str, RawChain]:
-        """Fetch several chains, isolating failures.
-
-        Sequential rather than gathered: this is a free, shared, rate-limited
-        API key, and hammering it in parallel is how a public endpoint stops
-        being public. A handful of European names per cycle is not a latency
-        problem worth that risk.
-        """
-        out: dict[str, RawChain] = {}
-        for symbol in symbols:
-            try:
-                chain = await self.fetch_chain(symbol)
-            except ChainUnavailable:
-                continue
-            except Exception:
-                logger.warning("Eurex chain fetch failed for %s", symbol, exc_info=True)
-                continue
-            out[chain.symbol] = chain
-        return out
-
     async def validate(self, symbol: str, product: str | None = None) -> tuple[bool, str]:
         code = self.product_for(symbol, product)
         try:
             info = await self._product_info(code)
-        except Exception:
-            logger.warning("Eurex validation failed for %s", symbol, exc_info=True)
-            return False, ""
+        except Exception as exc:
+            raise ProviderUnavailable(f"Eurex did not answer for {code!r}: {exc}") from exc
         if info is None:
             return False, ""
         return True, info.get("UnderlyingName") or info.get("Name") or symbol
@@ -463,43 +445,11 @@ class EurexOptionProvider(OptionProvider):
         """The underlying's close for the settlement session."""
         if self._spot_source is None:
             return None
-        getter = getattr(self._spot_source, "fetch_close", None)
-        if getter is None:
-            return None
         try:
-            return await getter(symbol, on)
+            return await self._spot_source.fetch_close(symbol, on)
         except Exception:
             logger.warning("Session close lookup failed for %s on %s", symbol, on, exc_info=True)
             return None
-
-    async def _spot(self, symbol: str) -> dict | None:
-        """The underlying's spot, from the injected equity source."""
-        if self._spot_source is None:
-            return None
-        getter = getattr(self._spot_source, "fetch_spot", None)
-        if getter is None:
-            return None
-        block = await getter(symbol)
-        if not isinstance(block, dict):
-            return None
-
-        def _pos(value):
-            try:
-                f = float(value)
-            except (TypeError, ValueError):
-                return None
-            return f if f > 0 else None
-
-        return {
-            "spot": _pos(block.get("regularMarketPrice")),
-            # The one field that says whether the spot and the strikes are
-            # even on the same scale. See RawChain.spot_currency.
-            "currency": (block.get("currency") or "").upper() or None,
-            "bid": _pos(block.get("bid")),
-            "ask": _pos(block.get("ask")),
-            "previous_close": _pos(block.get("regularMarketPreviousClose")),
-            "market_state": block.get("marketState"),
-        }
 
 
 __all__ = ["EurexOptionProvider", "EurexGraphQLError"]
