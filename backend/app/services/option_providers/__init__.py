@@ -24,14 +24,22 @@ from app.services.option_providers.base import (
 )
 from app.services.option_providers.eurex import EurexOptionProvider
 from app.services.option_providers.euronext import EuronextOptionProvider
+from app.services.option_providers.ibkr import IbkrOptionProvider
 from app.services.option_providers.yahoo import YahooOptionProvider
 
 __all__ = [
     "ChainUnavailable", "OptionProvider", "RawChain", "RawOptionQuote",
     "init_option_provider", "get_option_provider", "for_venue", "all_providers",
+    "intraday_for",
 ]
 
 _PROVIDERS: dict[Venue, OptionProvider] = {}
+
+# Venues whose intraday polls go to a different feed than their chain. Eurex's
+# own feed is settlement-only, so with IBKR configured its intraday quotes
+# come from there while the catalog and the EOD settlement stay with Deutsche
+# Boerse.
+_INTRADAY: dict[Venue, IbkrOptionProvider] = {}
 
 # Name-based aliases, kept so ``OPTION_PROVIDER=yahoo`` in an existing .env
 # still means something and so a config typo still fails loudly.
@@ -68,6 +76,14 @@ def init_option_provider() -> None:
         # share, so it borrows the same equity quote Eurex does.
         Venue.EURONEXT: EuronextOptionProvider(spot_source=yahoo),
     }
+    _INTRADAY.clear()
+    # Imported here, not at module level: services.ibkr's client imports
+    # option_providers.base, so a top-level import is a cycle.
+    from app.services.ibkr import get_gateway
+
+    gateway = get_gateway()
+    if gateway is not None:
+        _INTRADAY[Venue.EUREX] = IbkrOptionProvider(gateway)
 
 
 def for_venue(venue: Venue | str) -> OptionProvider:
@@ -81,6 +97,11 @@ def for_venue(venue: Venue | str) -> OptionProvider:
     if provider is None:
         raise ValueError(f"No option provider registered for venue {key!r}")
     return provider
+
+
+def intraday_for(venue: Venue | str) -> IbkrOptionProvider | None:
+    """The venue's separate intraday provider, or None if its chain provider does both."""
+    return _INTRADAY.get(Venue(venue))
 
 
 def all_providers() -> dict[Venue, OptionProvider]:

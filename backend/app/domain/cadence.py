@@ -93,17 +93,28 @@ def floor_to_slot(ts: datetime, base_minutes: int) -> datetime:
     return datetime.fromtimestamp((epoch // step) * step, tz=ts.tzinfo)
 
 
-def should_persist(dte: int, ts: datetime, base_minutes: int) -> bool:
+def should_persist(
+    dte: int, ts: datetime, base_minutes: int, stagger: date | None = None
+) -> bool:
     """Whether a contract with ``dte`` days to expiry is stored on this tick.
 
     ``dte`` below zero (expired) and the LEAPS bucket both return False: LEAPS
     are captured by the end-of-day snapshot job, which bypasses this check.
+
+    ``stagger`` (the contract's expiration) spreads a coarse bucket across the
+    slots it spans, one expiry at a time, instead of taking the whole bucket on
+    one slot. Every contract keeps its interval and an expiry stays a
+    simultaneous cross-section; what changes is that a whole-chain snapshot
+    is complete only across ``interval`` minutes, not on one slot. Used where
+    each contract is a separate request (IBKR), so a 30-minute slot does not
+    carry six times the requests of the 5-minute slots around it.
     """
     bucket = bucket_for(dte)
     if bucket.interval_minutes <= 0:
         return False
     every = max(1, bucket.interval_minutes // base_minutes)
-    return slot_index(ts, base_minutes) % every == 0
+    phase = stagger.toordinal() % every if stagger is not None else 0
+    return slot_index(ts, base_minutes) % every == phase
 
 
 def expected_rows_per_session(

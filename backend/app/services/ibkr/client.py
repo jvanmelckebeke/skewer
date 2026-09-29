@@ -13,7 +13,7 @@ from typing import Any
 import httpx
 
 from app.config import settings
-from app.services.ibkr.base import ContractInfo
+from app.services.ibkr.base import ContractInfo, SnapshotJob
 from app.services.option_providers.base import ProviderUnavailable
 
 
@@ -51,3 +51,17 @@ class HttpIbkrGateway:
             params["max_dte"] = max_dte
         data = await self._request("GET", f"/options/{under_con_id}/contracts", params=params)
         return [ContractInfo.model_validate(row) for row in data]
+
+    async def submit_snapshots(
+        self, con_ids: list[int], underlying: int, priority: str = "bulk"
+    ) -> SnapshotJob:
+        """``POST /snapshots``: queue one read per conId, plus the underlying."""
+        data = await self._request(
+            "POST", "/snapshots",
+            json={"conIds": con_ids, "underlying": underlying, "priority": priority},
+        )
+        return SnapshotJob.model_validate(data)
+
+    async def snapshot_job(self, job_id: str) -> SnapshotJob:
+        """``GET /snapshots/{id}``."""
+        return SnapshotJob.model_validate(await self._request("GET", f"/snapshots/{job_id}"))

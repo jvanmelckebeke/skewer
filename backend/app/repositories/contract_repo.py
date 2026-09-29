@@ -10,6 +10,7 @@ from sqlalchemy.orm import aliased
 from app.domain.contracts import ContractRef
 from app.models import OptionContract
 from app.services.ibkr.matching import CatalogRow
+from app.services.option_providers.ibkr import Quotable
 
 logger = logging.getLogger(__name__)
 
@@ -301,3 +302,29 @@ class ContractRepository:
             await self.db.execute(update(OptionContract), changed)
         await self.db.commit()
         return len(changed)
+
+    async def quotable(self, underlying_id: int, root: str, live_on: date) -> list[Quotable]:
+        """Live contracts that have an IBKR conId, as refs the persist path can write.
+
+        Rebuilt from the stored row rather than from a provider response,
+        because the IBKR provider is handed contracts instead of discovering
+        them. ``root`` is the venue product, which the row does not store.
+        """
+        result = await self.db.execute(
+            select(OptionContract).where(
+                OptionContract.underlying_id == underlying_id,
+                OptionContract.expiration >= live_on,
+                OptionContract.ibkr_con_id.is_not(None),
+            )
+        )
+        return [
+            Quotable(
+                ref=ContractRef(
+                    symbol=c.symbol, venue=c.venue, root=root, expiration=c.expiration,
+                    right=c.right, strike=float(c.strike), exercise_style=c.exercise_style,
+                    contract_size=c.contract_size, currency=c.currency, id=c.id,
+                ),
+                con_id=c.ibkr_con_id,
+            )
+            for c in result.scalars().all()
+        ]
