@@ -1,59 +1,28 @@
-"""HTTP client for the shared ibkr-svc gateway.
+"""The ibkr-svc implementation of :class:`~app.services.ibkr.base.IbkrGateway`.
 
 skewer never talks to IB Gateway itself. ibkr-svc owns the one API session,
 the market-data line budget and the pacing, and fibenchi uses it too; its
 OpenAPI document lives in the ibkr-gateway repo at ``svc/openapi.json``. The
-models here type the fields skewer reads and ignore the rest.
+models in ``base.py`` type the fields skewer reads and ignore the rest.
 """
 
 from __future__ import annotations
 
-from datetime import date
 from typing import Any
 
 import httpx
-from pydantic import BaseModel
 
 from app.config import settings
+from app.services.ibkr.base import ContractInfo
 from app.services.option_providers.base import ProviderUnavailable
 
 
-class ContractInfo(BaseModel):
-    """One resolved IBKR contract. Eurex options carry no ISIN (``isin`` is null)."""
-
-    conId: int
-    secType: str = ""
-    symbol: str = ""
-    tradingClass: str = ""
-    lastTradeDateOrContractMonth: str = ""
-    strike: float = 0.0
-    right: str = ""
-    multiplier: str = ""
-    currency: str = ""
-    exchange: str = ""
-    localSymbol: str = ""
-    underConId: int = 0
-    isin: str | None = None
-
-    @property
-    def expiry(self) -> date | None:
-        text = self.lastTradeDateOrContractMonth[:8]
-        try:
-            return date(int(text[:4]), int(text[4:6]), int(text[6:8]))
-        except (ValueError, IndexError):
-            return None
-
-
-class IbkrClient:
-    """Async client for ibkr-svc. Any transport or 5xx failure is ProviderUnavailable."""
+class HttpIbkrGateway:
+    """ibkr-svc over HTTP. Any transport or 5xx failure is ProviderUnavailable."""
 
     def __init__(self, base_url: str | None = None, timeout: float | None = None) -> None:
         self._base_url = (base_url or settings.ibkr_svc_url).rstrip("/")
         self._timeout = timeout or settings.ibkr_timeout_seconds
-
-    @property
-    def configured(self) -> bool:
-        return bool(self._base_url)
 
     async def _request(self, method: str, path: str, **kwargs) -> Any:
         try:
@@ -66,9 +35,11 @@ class IbkrClient:
         response.raise_for_status()
         return response.json()
 
-    async def resolve(self, **spec) -> list[ContractInfo]:
-        """``POST /contracts/resolve`` with a ContractSpec (secType, symbol, exchange, ...)."""
-        data = await self._request("POST", "/contracts/resolve", json=spec)
+    async def resolve_isin(self, isin: str) -> list[ContractInfo]:
+        """``POST /contracts/resolve`` by ISIN."""
+        data = await self._request(
+            "POST", "/contracts/resolve", json={"secIdType": "ISIN", "secId": isin}
+        )
         return [ContractInfo.model_validate(row) for row in data]
 
     async def option_contracts(

@@ -25,8 +25,8 @@ from app.background_tasks.registry import background_task
 from app.config import settings
 from app.database import async_session
 from app.services.chain_sync import sync_all
+from app.services.ibkr import get_gateway
 from app.services.ibkr.catalog import link_eurex_contracts
-from app.services.ibkr.client import IbkrClient
 
 logger = logging.getLogger(__name__)
 
@@ -156,10 +156,13 @@ async def link_ibkr_contracts() -> None:
     run, which is the intended order: skewer's rows come from the venue, and
     IBKR only supplies the handle to quote them by.
     """
+    gateway = get_gateway()
+    if gateway is None:
+        return
     today = datetime.now(tz=timezone.utc).date()
     async with async_session() as db:
         try:
-            reports = await link_eurex_contracts(db, IbkrClient(), today)
+            reports = await link_eurex_contracts(db, gateway, today)
         except Exception:
             logger.exception("IBKR catalog pass failed")
             return

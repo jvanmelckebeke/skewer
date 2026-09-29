@@ -6,8 +6,8 @@ import pytest_asyncio
 
 from app.domain.contracts import Right
 from app.domain.venue import Venue
+from app.services.ibkr.base import ContractInfo
 from app.services.ibkr.catalog import link_eurex_contracts
-from app.services.ibkr.client import ContractInfo
 
 TODAY = date(2026, 9, 29)
 OCT = date(2026, 10, 16)
@@ -24,7 +24,7 @@ def _ib(con_id, cls, strike, right, expiry=OCT):
 
 class FakeIbkr:
     def __init__(self):
-        self.resolved: list[dict] = []
+        self.resolved: list[str] = []
         self.chains_fetched: list[int] = []
         self.chain = [
             _ib(101, "BMW", 56.0, "C"),
@@ -32,8 +32,8 @@ class FakeIbkr:
             _ib(201, "BMWE", 56.0, "C"),  # the European twin, same terms
         ]
 
-    async def resolve(self, **spec):
-        self.resolved.append(spec)
+    async def resolve_isin(self, isin):
+        self.resolved.append(isin)
         # Two listings, as for a dual-listed share; only the EUR one is BMW's.
         return [
             ContractInfo(conId=999, secType="STK", symbol="BMWYY", currency="USD"),
@@ -90,7 +90,7 @@ async def test_resolves_the_underlying_then_links_its_contracts(db, bmw):
 
     [report] = await link_eurex_contracts(db, client, TODAY, eurex=FakeEurex())
 
-    assert client.resolved == [{"secIdType": "ISIN", "secId": "DE0005190003"}]
+    assert client.resolved == ["DE0005190003"]
     # The listing in the product's currency is verified first, and it is enough.
     assert client.chains_fetched[0] == BMW_STOCK
     await db.refresh(bmw)

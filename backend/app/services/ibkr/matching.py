@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 from datetime import date
 
 from app.domain.contracts import Right
-from app.services.ibkr.client import ContractInfo
+from app.services.ibkr.base import ContractInfo
 
 _ADJUSTED_SUFFIX = re.compile(r"\.\d+$")
 

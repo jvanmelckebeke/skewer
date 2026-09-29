@@ -119,8 +119,10 @@ would write the same integer ~78 times a session.
   Every Yahoo request goes through `YahooOptionProvider._call`: 1 s spacing,
   one reused session, and a circuit breaker on "Invalid Crumb". The throttle
   in `yahoo_rate_limit.py` is a copy of fibenchi's, so fix both together.
-- `services/ibkr/` — the client for the shared ibkr-svc gateway (its OpenAPI
-  document is `svc/openapi.json` in the ibkr-gateway repo), and the daily
+- `services/ibkr/` — `IbkrGateway` (a Protocol in `base.py`) is what skewer
+  asks of IBKR; `HttpIbkrGateway` is the one implementation, against the shared
+  ibkr-svc (its OpenAPI document is `svc/openapi.json` in the ibkr-gateway
+  repo), and `get_gateway()` hands it out, None when unconfigured. The daily
   `ibkr_catalog` job that gives each live Eurex contract its `ibkr_con_id`.
   IBKR has no ISIN for Eurex options, so the link is by terms: (tradingClass
   minus any `.N` suffix = Eurex product, expiry, strike to 4 dp, right,

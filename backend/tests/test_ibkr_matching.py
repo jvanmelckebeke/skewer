@@ -8,7 +8,7 @@ class ``SAP.1`` with multiplier 101 and a two-decimal strike.
 from datetime import date
 
 from app.domain.contracts import Right
-from app.services.ibkr.client import ContractInfo
+from app.services.ibkr.base import ContractInfo
 from app.services.ibkr.matching import CatalogRow, match, product_code
 
 OCT = date(2026, 10, 16)

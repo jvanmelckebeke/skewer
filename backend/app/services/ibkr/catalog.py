@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.domain.venue import Venue
 from app.repositories.contract_repo import ContractRepository
 from app.repositories.underlying_repo import UnderlyingRepository
-from app.services.ibkr.client import IbkrClient
+from app.services.ibkr.base import IbkrGateway
 from app.services.ibkr.matching import match, product_code
 from app.services.ibkr.underlying import resolve_underlying
 from app.services.option_providers.eurex import EurexOptionProvider
@@ -36,7 +36,7 @@ class LinkReport:
 
 
 async def link_eurex_contracts(
-    db: AsyncSession, client: IbkrClient, today: date,
+    db: AsyncSession, gateway: IbkrGateway, today: date,
     eurex: EurexOptionProvider | None = None,
 ) -> list[LinkReport]:
     """Resolve each active Eurex underlying's conId, then match its contracts.
@@ -60,13 +60,13 @@ async def link_eurex_contracts(
                 if not isin:
                     reports.append(LinkReport(symbol, product, 0, 0, 0, 0, 0, "no underlying ISIN"))
                     continue
-                con_id = await resolve_underlying(client, product, isin, info.get("Currency"))
+                con_id = await resolve_underlying(gateway, product, isin, info.get("Currency"))
                 if con_id is None:
                     reports.append(LinkReport(symbol, product, 0, 0, 0, 0, 0, "underlying not resolved"))
                     continue
                 await UnderlyingRepository(db).set_ibkr_con_id(uid, con_id)
             contracts = [
-                c for c in await client.option_contracts(con_id, "EUREX")
+                c for c in await gateway.option_contracts(con_id, "EUREX")
                 if product_code(c.tradingClass) == product
             ]
             rows = await contract_repo.catalog_rows(uid, today)
