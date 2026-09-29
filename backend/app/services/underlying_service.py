@@ -16,6 +16,7 @@ from app.repositories.quote_repo import QuoteRepository
 from app.repositories.underlying_repo import UnderlyingRepository
 from app.services.market_calendar import is_market_open, local_now, minutes_since_open
 from app.services.option_providers import for_venue
+from app.services.option_providers.base import ProviderUnavailable
 
 logger = logging.getLogger(__name__)
 
@@ -67,15 +68,28 @@ async def add_underlying(
     candidates = (venue,) if venue is not None else _DETECT_ORDER
     resolved: Venue | None = None
     name = ""
+    unreachable: list[str] = []
     for candidate in candidates:
         try:
             ok, found = await for_venue(candidate).validate(symbol, venue_product)
+        except ProviderUnavailable as exc:
+            logger.warning("%s unavailable while validating %s: %s", candidate, symbol, exc)
+            unreachable.append(f"{spec_for(candidate).label} ({exc})")
+            continue
         except Exception:
             logger.warning("Validation failed for %s on %s", symbol, candidate, exc_info=True)
             continue
         if ok:
             resolved, name = candidate, found
             break
+
+    if resolved is None and unreachable:
+        # A venue that could not answer has not said the symbol has no
+        # options, so "no chain available" would be a verdict nobody gave.
+        raise HTTPException(
+            503,
+            f"Could not check {symbol}: {'; '.join(unreachable)}. Try again later.",
+        )
 
     if resolved is None:
         tried = ", ".join(spec_for(v).label for v in candidates)

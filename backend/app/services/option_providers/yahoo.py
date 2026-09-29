@@ -44,6 +44,7 @@ from app.domain.venue import Venue
 from app.services.option_providers.base import (
     ChainUnavailable,
     OptionProvider,
+    ProviderUnavailable,
     RawChain,
     RawOptionQuote,
 )
@@ -65,13 +66,8 @@ SESSION_TTL = 600.0
 _T = TypeVar("_T")
 
 
-class YahooThrottled(RuntimeError):
-    """Yahoo's circuit breaker is open, so no request was sent.
-
-    Deliberately not :class:`ChainUnavailable`: that means "this symbol has no
-    options", and validation would turn a temporary IP block into a permanent
-    rejection of a perfectly good underlying.
-    """
+class YahooThrottled(ProviderUnavailable):
+    """Yahoo's circuit breaker is open, so no request was sent."""
 
 
 def _throttled() -> Any:
@@ -446,9 +442,10 @@ class YahooOptionProvider(OptionProvider):
             chain = await self.fetch_chain(symbol)
         except ChainUnavailable:
             return False, ""
-        except Exception:
-            logger.warning("Validation fetch failed for %s", symbol, exc_info=True)
-            return False, ""
+        except ProviderUnavailable:
+            raise
+        except Exception as exc:
+            raise ProviderUnavailable(f"Yahoo did not answer for {symbol!r}: {exc}") from exc
         if not chain.quotes:
             return False, ""
         return True, chain.name
