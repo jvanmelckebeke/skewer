@@ -36,9 +36,15 @@ class LinkReport:
 
 
 async def link_eurex_contracts(
-    db: AsyncSession, client: IbkrClient, today: date
+    db: AsyncSession, client: IbkrClient, today: date,
+    eurex: EurexOptionProvider | None = None,
 ) -> list[LinkReport]:
-    """Resolve each active Eurex underlying's conId, then match its contracts."""
+    """Resolve each active Eurex underlying's conId, then match its contracts.
+
+    ``eurex`` supplies the product's underlying ISIN and currency, which is
+    what the underlying is resolved by.
+    """
+    eurex = eurex or EurexOptionProvider()
     underlyings = [u for u in await UnderlyingRepository(db).list_active() if u.venue == Venue.EUREX]
     # Captured while the rows are live: the loop commits.
     targets = [(u.id, u.symbol, u.venue_product, u.ibkr_con_id) for u in underlyings]
@@ -49,7 +55,12 @@ async def link_eurex_contracts(
         product = EurexOptionProvider.product_for(symbol, venue_product)
         try:
             if con_id is None:
-                con_id = await resolve_underlying(client, symbol, product)
+                info = await eurex.product_info(product) or {}
+                isin = info.get("UnderlyingISIN")
+                if not isin:
+                    reports.append(LinkReport(symbol, product, 0, 0, 0, 0, 0, "no underlying ISIN"))
+                    continue
+                con_id = await resolve_underlying(client, product, isin, info.get("Currency"))
                 if con_id is None:
                     reports.append(LinkReport(symbol, product, 0, 0, 0, 0, 0, "underlying not resolved"))
                     continue

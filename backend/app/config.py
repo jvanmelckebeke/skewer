@@ -41,7 +41,10 @@ class Settings(BaseSettings):
     # Reached over the external docker network `ibkr`. Empty disables every
     # IBKR path: no conId matching, no IBKR provider.
     ibkr_svc_url: str = ""
-    ibkr_timeout_seconds: float = 60.0
+    # Above ibkr-svc's own 180 s cap on a contract lookup, so its 504 arrives
+    # as an answer instead of this client giving up first. An uncached Eurex
+    # option catalog takes about 60 s.
+    ibkr_timeout_seconds: float = 200.0
 
     # --- Euronext (EWS derivatives web service) ---------------------------
     # Requires a licensed auth key from Euronext London; there is no anonymous
