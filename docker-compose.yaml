@@ -38,10 +38,16 @@ services:
       EOD_SNAPSHOT_CRON: ${EOD_SNAPSHOT_CRON:-10 21 * * 1-5}
       RISK_FREE_RATE: ${RISK_FREE_RATE:-0.04}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      # The shared IBKR gateway (ibkr-gateway repo), reached over the
+      # external `ibkr` network. Empty disables every IBKR path.
+      IBKR_SVC_URL: ${IBKR_SVC_URL:-http://ibkr-svc:8000}
     ports:
       - "18100:8000"
     volumes:
       - ./backend:/app
+    networks:
+      - default
+      - ibkr
     depends_on:
       db:
         condition: service_healthy
@@ -58,7 +64,15 @@ services:
       - "traefik.enable=true"
       - "traefik.http.routers.skewer.entrypoints=web"
       - "traefik.http.routers.skewer.rule=Host(`skewer.desktop.lan`)"
+      - "traefik.http.routers.skewer-tls.rule=Host(`skewer.desktop.jarivm.be`)"
+      - "traefik.http.routers.skewer-tls.entrypoints=websecure"
+      - "traefik.http.routers.skewer-tls.tls=true"
       - "traefik.http.services.skewer.loadbalancer.server.port=80"
 
 volumes:
   pgdata:
+
+networks:
+  # Created by the ibkr-gateway compose project; skewer only joins it.
+  ibkr:
+    external: true

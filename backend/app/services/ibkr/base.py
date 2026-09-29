@@ -11,7 +11,7 @@ the calls its test makes, and nothing inherits behaviour from here.
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from typing import Protocol
 
 from pydantic import BaseModel
@@ -43,6 +43,37 @@ class ContractInfo(BaseModel):
             return None
 
 
+class Quote(BaseModel):
+    """One snapshot read. Prices are null, never 0, when IB sent nothing or <= 0."""
+
+    conId: int
+    bid: float | None = None
+    ask: float | None = None
+    bidSize: float | None = None
+    askSize: float | None = None
+    last: float | None = None
+    volume: float | None = None
+    close: float | None = None
+    receive_time: datetime | None = None
+    last_trade_time: datetime | None = None
+    market_data_type: str | None = None
+    timed_out: bool = False
+    notices: list[int] = []
+    error: str | None = None
+
+
+class SnapshotJob(BaseModel):
+    id: str
+    status: str
+    """``running``, ``done`` or ``failed``."""
+    quotes: list[Quote] = []
+    underlying: list[Quote] = []
+    """Two reads of the underlying, one before the first option and one after
+    the last, so every option's receive_time falls between them."""
+    retried: int = 0
+    error: str | None = None
+
+
 class IbkrGateway(Protocol):
     """What skewer asks of IBKR. Any failure to answer is ``ProviderUnavailable``."""
 
@@ -54,4 +85,14 @@ class IbkrGateway(Protocol):
         self, under_con_id: int, exchange: str = "EUREX", max_dte: int | None = None
     ) -> list[ContractInfo]:
         """The option chain on ``exchange`` for the underlying with this conId."""
+        ...
+
+    async def submit_snapshots(
+        self, con_ids: list[int], underlying: int, priority: str = "bulk"
+    ) -> SnapshotJob:
+        """Queue one read per conId, plus two of the underlying around them."""
+        ...
+
+    async def snapshot_job(self, job_id: str) -> SnapshotJob:
+        """The job's current state. Jobs expire an hour after they start."""
         ...

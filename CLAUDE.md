@@ -311,7 +311,15 @@ trailing `/graphql`; Eurex's own docs give a URL that 404s) serves contract
 terms, `ExerciseStyle`, `VersionNr` and daily `SettlementPrices`, free and
 anonymous. It is CORS-open, so Apollo Sandbox works against it directly.
 
-- **There is no order book.** No bid, no ask, no intraday anything. `bid`/`ask`
+- **Intraday comes from IBKR, when configured.** With `IBKR_SVC_URL` set and
+  an underlying's `ibkr_con_id` resolved, its intraday polls go to
+  `IbkrOptionProvider` (free delayed data, `feed_delay` 15 min). The cadence
+  picks the contracts *before* the fetch, staggered by expiry, because each is
+  one request on a shared line budget. The poll is stamped `floor(start - 15
+  min)`; a quote is kept only if its market-data type is `delayed` and it
+  arrived inside that slot's window. Deutsche Boerse stays the catalog and the
+  EOD settlement, and an IBKR poll never touches `last_seen_at`.
+- **The free feed has no order book.** No bid, no ask, no intraday anything. `bid`/`ask`
   are NULL because the field does not exist, not because the book was empty.
   `intraday = False` makes every Eurex poll a full one, since cadence selection
   has nothing to choose between.

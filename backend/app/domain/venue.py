@@ -140,6 +140,10 @@ VENUES: dict[Venue, VenueSpec] = {
         # directly. This is only the fallback for a row that omits it.
         default_exercise_style=ExerciseStyle.AMERICAN,
         default_contract_size=100,
+        # The intraday feed is IBKR's free delayed data. Set to zero if the
+        # bot user ever gets a live Eurex subscription: the IBKR provider
+        # accepts only quotes whose market-data type matches this.
+        feed_delay=timedelta(minutes=15),
     ),
     Venue.EURONEXT: VenueSpec(
         venue=Venue.EURONEXT,

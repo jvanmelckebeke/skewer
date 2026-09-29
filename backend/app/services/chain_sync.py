@@ -36,8 +36,10 @@ from app.services.compute.dividends import (
     yield_per_contract,
 )
 from app.services.compute.iv import IVStatus, implied_vol, mid_price
+from app.services.ibkr.venues import IBKR_VENUES
 from app.services.market_calendar import is_market_open, local_now, previous_session
-from app.services.option_providers import ChainUnavailable, RawChain, for_venue
+from app.services.option_providers import ChainUnavailable, RawChain, for_venue, intraday_for
+from app.services.option_providers.ibkr import IbkrOptionProvider
 
 logger = logging.getLogger(__name__)
 
@@ -61,14 +63,27 @@ async def sync_underlying(
     full: bool = False, now: datetime | None = None,
     venue: Venue = Venue.OCC, venue_product: str | None = None,
     imply_dividends: bool = True, catalog_only: bool = False,
+    ibkr_con_id: int | None = None, poll_started: datetime | None = None,
 ) -> SyncResult:
     """Poll one underlying and persist the selected slice of its chain.
 
     ``venue`` picks the provider. It is a per-underlying property rather than
     a global setting because NVDA and BMW.DE are polled in the same cycle from
     different feeds.
+
+    An intraday poll of a venue with a separate intraday feed (Eurex, with
+    IBKR configured) goes there when the underlying has an IBKR conId;
+    ``poll_started`` is when the whole poll began, which is what its rows are
+    stamped from. Everything else, and the EOD snapshot, uses the venue's
+    chain provider as before.
     """
     now = now or datetime.now(tz=timezone.utc)
+    intraday = None if (full or catalog_only) else intraday_for(venue)
+    if intraday is not None and ibkr_con_id is not None:
+        return await _sync_subset(
+            db, underlying_id, symbol, dividend_yield, venue, venue_product,
+            ibkr_con_id, intraday, poll_started or now, imply_dividends,
+        )
     provider = for_venue(venue)
 
     try:
@@ -103,11 +118,53 @@ async def sync_underlying(
     )
 
 
+async def _sync_subset(
+    db: AsyncSession, underlying_id: int, symbol: str, dividend_yield: float,
+    venue: Venue, venue_product: str | None, under_con_id: int,
+    provider: IbkrOptionProvider, started: datetime, imply_dividends: bool,
+) -> SyncResult:
+    """An intraday poll through a per-contract feed (IBKR).
+
+    The cadence selection happens *before* the fetch here, because every
+    contract is a separate request against a shared line budget. The whole
+    poll is stamped ``floor(started - feed_delay)``: a delayed feed shows the
+    book as it was, and the slot is when that was. Coarse buckets are
+    staggered by expiry so each slot carries a similar number of requests.
+    """
+    base = settings.base_poll_minutes
+    slot = floor_to_slot(started - spec_for(venue).feed_delay, base)
+    today = slot.date()
+    mapped = IBKR_VENUES[venue].product_for(symbol, venue_product)
+    if mapped is None:
+        return SyncResult(symbol, 0, 0, 0, 0, 0, None, skipped_reason="no_ibkr_exchange")
+    _exchange, root = mapped
+    candidates = await ContractRepository(db).quotable(underlying_id, root, today)
+    due = [
+        c for c in candidates
+        if should_persist(c.ref.dte(today), slot, base, stagger=c.ref.expiration)
+    ]
+    if not due:
+        return SyncResult(symbol, 0, 0, 0, 0, 0, slot)
+
+    try:
+        chain = await provider.fetch_subset(symbol, under_con_id, due, slot, base)
+    except Exception:
+        logger.warning("IBKR fetch failed for %s", symbol, exc_info=True)
+        return SyncResult(symbol, 0, 0, 0, 0, 0, None, skipped_reason="fetch_failed")
+    if not chain.quotes:
+        return SyncResult(symbol, len(due), 0, 0, 0, 0, None, skipped_reason="empty_chain")
+
+    return await persist_chain(
+        db, underlying_id, chain, dividend_yield, full=False, now=slot,
+        imply_dividends=imply_dividends, register=False, staggered=True,
+    )
+
+
 async def persist_chain(
     db: AsyncSession, underlying_id: int, chain: RawChain,
     dividend_yield: float = 0.0, full: bool = False, now: datetime | None = None,
     settled: bool = False, imply_dividends: bool = True,
-    catalog_only: bool = False,
+    catalog_only: bool = False, register: bool = True, staggered: bool = False,
 ) -> SyncResult:
     """Persist an already-fetched chain. Split out so it is testable without
     touching the network — the fetch is the only impure part above.
@@ -123,7 +180,12 @@ async def persist_chain(
 
     ``catalog_only`` registers what exists and stores no prices. It is the
     mode the weekend catalogue refresh needs: a closed market still lists new
-    expirations, but its book is yesterday's, frozen, and mostly zero-bid."""
+    expirations, but its book is yesterday's, frozen, and mostly zero-bid.
+
+    ``register=False`` is for quotes of contracts that are already stored
+    (their refs carry ids): nothing is upserted and ``last_seen_at`` is left
+    alone, because a quote feed is not the venue's catalog. ``staggered``
+    must match how the contracts were chosen; see ``should_persist``."""
     now = now or datetime.now(tz=timezone.utc)
     slot = _slot_for(chain, now, settled)
     today = slot.date()
@@ -134,9 +196,13 @@ async def persist_chain(
     # 1. Register contracts. Every contract in the response is registered, even
     #    ones this tick will not quote — the dimension table is the catalogue
     #    of what exists, independent of sampling.
-    before = await contract_repo.count_for(underlying_id)
-    ids = await contract_repo.upsert_many(underlying_id, chain.quotes, seen_at=now)
-    after = await contract_repo.count_for(underlying_id)
+    if register:
+        before = await contract_repo.count_for(underlying_id)
+        ids = await contract_repo.upsert_many(underlying_id, chain.quotes, seen_at=now)
+        after = await contract_repo.count_for(underlying_id)
+    else:
+        ids = {q.ref.symbol: q.ref.id for q in chain.quotes if q.ref.id is not None}
+        before = after = 0
 
     # 1a. The catalogue path stops here. Everything below stores prices, and
     #     off-session there are no prices to store — only a stale book that
@@ -153,7 +219,10 @@ async def persist_chain(
     else:
         selected = [
             q for q in chain.quotes
-            if should_persist(q.ref.dte(today), slot, settings.base_poll_minutes)
+            if should_persist(
+                q.ref.dte(today), slot, settings.base_poll_minutes,
+                stagger=q.ref.expiration if staggered else None,
+            )
         ]
 
     if not selected:
@@ -422,7 +491,7 @@ async def sync_all(
     # may roll back, and either expires every ORM instance in the session.
     targets = [
         (u.id, u.symbol, float(u.dividend_yield or 0.0), u.venue, u.venue_product,
-         bool(u.dividend_yield_is_manual))
+         bool(u.dividend_yield_is_manual), u.ibkr_con_id)
         for u in underlyings
     ]
     if only_due and not catalog_only:
@@ -430,12 +499,13 @@ async def sync_all(
         targets = [t for t in targets if due[t[3]]]
 
     results = []
-    for uid, symbol, div, venue, venue_product, manual_div in targets:
+    for uid, symbol, div, venue, venue_product, manual_div, ibkr_con_id in targets:
         try:
             result = await sync_underlying(
                 db, uid, symbol, div, full=full, now=now,
                 venue=venue, venue_product=venue_product,
                 imply_dividends=not manual_div, catalog_only=catalog_only,
+                ibkr_con_id=ibkr_con_id, poll_started=polled_at,
             )
         except Exception:
             logger.warning("Chain sync failed for %s; skipping", symbol, exc_info=True)
