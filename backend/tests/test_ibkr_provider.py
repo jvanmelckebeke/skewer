@@ -108,7 +108,7 @@ async def test_only_usable_quotes_are_kept():
         _q(14171, bid=53.5, ask=53.7),
         _q(14171, bid=53.7, ask=53.9),
     ])
-    provider = IbkrOptionProvider(gateway=FakeClient(job, running_polls=2))
+    provider = IbkrOptionProvider(Venue.EUREX, gateway=FakeClient(job, running_polls=2))
 
     chain = await provider.fetch_subset("BMW.DE", 14171, CONTRACTS, SLOT, BASE)
 
@@ -122,7 +122,7 @@ async def test_only_usable_quotes_are_kept():
 async def test_a_live_quote_on_a_delayed_venue_is_dropped():
     job = SnapshotJob(id="j1", status="done", quotes=[_q(101, bid=1.0, ask=1.2, market_data_type="live")])
 
-    chain = await IbkrOptionProvider(gateway=FakeClient(job)).fetch_subset(
+    chain = await IbkrOptionProvider(Venue.EUREX, gateway=FakeClient(job)).fetch_subset(
         "BMW.DE", 14171, CONTRACTS[:1], SLOT, BASE
     )
 
@@ -133,7 +133,7 @@ async def test_a_failed_job_is_provider_unavailable():
     job = SnapshotJob(id="j1", status="failed", error="gateway disconnected")
 
     with pytest.raises(ProviderUnavailable, match="gateway disconnected"):
-        await IbkrOptionProvider(gateway=FakeClient(job)).fetch_subset(
+        await IbkrOptionProvider(Venue.EUREX, gateway=FakeClient(job)).fetch_subset(
             "BMW.DE", 14171, CONTRACTS[:1], SLOT, BASE
         )
 
@@ -173,7 +173,7 @@ async def test_an_intraday_poll_is_stamped_start_minus_delay(db, monkeypatch):
     job = SnapshotJob(id="j1", status="done", quotes=[_q(101, bid=1.0, ask=1.2)],
                       underlying=[_q(14171, bid=53.5, ask=53.7)])
     client = FakeClient(job)
-    monkeypatch.setattr(chain_sync, "intraday_for", lambda venue: IbkrOptionProvider(gateway=client))
+    monkeypatch.setattr(chain_sync, "intraday_for", lambda venue: IbkrOptionProvider(Venue.EUREX, gateway=client))
 
     started = datetime.combine(date(2026, 9, 30), time(10, 7), tzinfo=BERLIN).astimezone(timezone.utc)
     result = await chain_sync.sync_underlying(
@@ -186,3 +186,34 @@ async def test_an_intraday_poll_is_stamped_start_minus_delay(db, monkeypatch):
     assert stored == [(SLOT, pytest.approx(1.1))]
     await db.refresh(near)
     assert near.last_seen_at == seen  # a quote feed is not the catalog
+
+
+# --------------------------------------------------------------- registry
+
+
+def test_one_provider_per_enabled_venue_sharing_one_gateway(monkeypatch):
+    from app.config import settings
+    from app.services import ibkr as ibkr_pkg
+    from app.services import option_providers as registry
+
+    shared = object()
+    monkeypatch.setattr(ibkr_pkg, "_gateway", shared)
+    monkeypatch.setattr(settings, "ibkr_venues", "eurex,euronext")
+    registry.init_option_provider()
+
+    eurex, euronext = registry.intraday_for(Venue.EUREX), registry.intraday_for(Venue.EURONEXT)
+    assert (eurex.venue, euronext.venue) == (Venue.EUREX, Venue.EURONEXT)
+    assert eurex._gateway is shared and euronext._gateway is shared
+    assert registry.intraday_for(Venue.OCC) is None
+
+
+def test_no_intraday_providers_without_a_gateway(monkeypatch):
+    from app.config import settings
+    from app.services import ibkr as ibkr_pkg
+    from app.services import option_providers as registry
+
+    monkeypatch.setattr(ibkr_pkg, "_gateway", None)
+    monkeypatch.setattr(settings, "ibkr_svc_url", "")
+    registry.init_option_provider()
+
+    assert registry.intraday_for(Venue.EUREX) is None

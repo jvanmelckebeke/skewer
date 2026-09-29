@@ -80,10 +80,12 @@ def init_option_provider() -> None:
     # Imported here, not at module level: services.ibkr's client imports
     # option_providers.base, so a top-level import is a cycle.
     from app.services.ibkr import get_gateway
+    from app.services.ibkr.venues import enabled_venues
 
     gateway = get_gateway()
     if gateway is not None:
-        _INTRADAY[Venue.EUREX] = IbkrOptionProvider(gateway)
+        for ibkr_venue in enabled_venues():
+            _INTRADAY[ibkr_venue.venue] = IbkrOptionProvider(ibkr_venue.venue, gateway)
 
 
 def for_venue(venue: Venue | str) -> OptionProvider:

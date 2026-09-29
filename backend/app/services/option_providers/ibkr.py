@@ -1,4 +1,7 @@
-"""Intraday Eurex quotes from IBKR, through the shared ibkr-svc gateway.
+"""Intraday quotes from IBKR, through the shared ibkr-svc gateway.
+
+One instance per venue that ``IBKR_VENUES`` enables (Eurex today); the venue
+sets the feed delay and the currency through its ``VenueSpec``.
 
 IBKR has no chain call: every contract is its own market-data request, and
 the gateway's ~100 lines are shared with fibenchi. So unlike the other
@@ -54,9 +57,8 @@ class Quotable:
 class IbkrOptionProvider:
     """Quotes a given subset of one underlying's contracts on one slot."""
 
-    venue = Venue.EUREX
-
-    def __init__(self, gateway: IbkrGateway) -> None:
+    def __init__(self, venue: Venue, gateway: IbkrGateway) -> None:
+        self.venue = venue
         self._gateway = gateway
         self._delay = spec_for(self.venue).feed_delay
         self._accepted_type = "delayed" if self._delay > timedelta(0) else "live"

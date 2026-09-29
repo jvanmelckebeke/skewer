@@ -36,9 +36,9 @@ from app.services.compute.dividends import (
     yield_per_contract,
 )
 from app.services.compute.iv import IVStatus, implied_vol, mid_price
+from app.services.ibkr.venues import IBKR_VENUES
 from app.services.market_calendar import is_market_open, local_now, previous_session
 from app.services.option_providers import ChainUnavailable, RawChain, for_venue, intraday_for
-from app.services.option_providers.eurex import EurexOptionProvider
 from app.services.option_providers.ibkr import IbkrOptionProvider
 
 logger = logging.getLogger(__name__)
@@ -134,7 +134,10 @@ async def _sync_subset(
     base = settings.base_poll_minutes
     slot = floor_to_slot(started - spec_for(venue).feed_delay, base)
     today = slot.date()
-    root = EurexOptionProvider.product_for(symbol, venue_product)
+    mapped = IBKR_VENUES[venue].product_for(symbol, venue_product)
+    if mapped is None:
+        return SyncResult(symbol, 0, 0, 0, 0, 0, None, skipped_reason="no_ibkr_exchange")
+    _exchange, root = mapped
     candidates = await ContractRepository(db).quotable(underlying_id, root, today)
     due = [
         c for c in candidates
