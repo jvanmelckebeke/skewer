@@ -260,7 +260,7 @@ class EurexOptionProvider(OptionProvider):
     async def fetch_chain(self, symbol: str, product: str | None = None) -> RawChain:
         code = self.product_for(symbol, product)
 
-        info = await self._product_info(code)
+        info = await self.product_info(code)
         if info is None:
             raise ChainUnavailable(f"No Eurex option product for {symbol!r} (tried {code!r})")
 
@@ -331,7 +331,7 @@ class EurexOptionProvider(OptionProvider):
     async def validate(self, symbol: str, product: str | None = None) -> tuple[bool, str]:
         code = self.product_for(symbol, product)
         try:
-            info = await self._product_info(code)
+            info = await self.product_info(code)
         except Exception as exc:
             raise ProviderUnavailable(f"Eurex did not answer for {code!r}: {exc}") from exc
         if info is None:
@@ -340,7 +340,7 @@ class EurexOptionProvider(OptionProvider):
 
     # ------------------------------------------------------------ internals
 
-    async def _product_info(self, code: str) -> dict | None:
+    async def product_info(self, code: str) -> dict | None:
         data = await self._query(_PRODUCT_QUERY, {"product": code})
         rows = (data.get("ProductInfos") or {}).get("data") or []
         # A product code can carry both a future and an option line (BMW is

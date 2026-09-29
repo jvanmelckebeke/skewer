@@ -134,7 +134,7 @@ async def test_eurex_validate_raises_when_the_api_fails(monkeypatch):
     async def broken(code):
         raise RuntimeError("503 from Deutsche Boerse")
 
-    monkeypatch.setattr(provider, "_product_info", broken)
+    monkeypatch.setattr(provider, "product_info", broken)
     with pytest.raises(ProviderUnavailable):
         await provider.validate("BMW.DE")
 
@@ -145,7 +145,7 @@ async def test_eurex_validate_still_says_no_for_an_unknown_product(monkeypatch):
     async def missing(code):
         return None
 
-    monkeypatch.setattr(provider, "_product_info", missing)
+    monkeypatch.setattr(provider, "product_info", missing)
     assert await provider.validate("NOPE.DE") == (False, "")
 
 

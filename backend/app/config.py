@@ -37,6 +37,19 @@ class Settings(BaseSettings):
     eurex_api_key: str = "68cdafd2-c5c1-49be-8558-37244ab4f513"
     eurex_timeout_seconds: float = 30.0
 
+    # --- IBKR (the shared ibkr-svc gateway) --------------------------------
+    # Reached over the external docker network `ibkr`. Empty disables every
+    # IBKR path: no conId matching, no IBKR provider.
+    ibkr_svc_url: str = ""
+    # Venues whose intraday quotes and conId matching go through IBKR, as
+    # comma-separated venue values. Only Eurex is verified; see
+    # services/ibkr/venues.py.
+    ibkr_venues: str = "eurex"
+    # Above ibkr-svc's own 180 s cap on a contract lookup, so its 504 arrives
+    # as an answer instead of this client giving up first. An uncached Eurex
+    # option catalog takes about 60 s.
+    ibkr_timeout_seconds: float = 200.0
+
     # --- Euronext (EWS derivatives web service) ---------------------------
     # Requires a licensed auth key from Euronext London; there is no anonymous
     # mode. With the key unset the provider refuses to poll rather than

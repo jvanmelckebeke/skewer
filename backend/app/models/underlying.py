@@ -1,6 +1,6 @@
 from datetime import date, datetime
 
-from sqlalchemy import Boolean, Date, DateTime, Enum, Numeric, String, func
+from sqlalchemy import BigInteger, Boolean, Date, DateTime, Enum, Numeric, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -38,6 +38,10 @@ class Underlying(Base):
     # each other in general (Ahold is "AH" on Euronext, "AD.AS" on Yahoo), so
     # the mapping is stored rather than guessed. NULL means "same as symbol".
     venue_product: Mapped[str | None] = mapped_column(String(20), nullable=True)
+
+    # IBKR's conId for the underlying itself: the key its option catalog and
+    # every snapshot request are asked by. NULL until resolved.
+    ibkr_con_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
 
     # Continuous dividend yield 'q' in Black-Scholes-Merton. Stored per
     # underlying rather than assumed zero: on a 2% yielder a year out, ignoring
