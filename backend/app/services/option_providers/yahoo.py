@@ -31,7 +31,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
+import time
 from datetime import date, datetime, timedelta, timezone
+from typing import Any, Callable, TypeVar
 
 from yahooquery import Ticker
 
@@ -44,8 +47,36 @@ from app.services.option_providers.base import (
     RawChain,
     RawOptionQuote,
 )
+from app.services.option_providers.yahoo_rate_limit import (
+    CrumbRejected,
+    YahooThrottle,
+    check_crumb,
+    yahoo_throttle,
+)
 
 logger = logging.getLogger(__name__)
+
+# How long one ``Ticker`` (its curl_cffi session, crumb and consent cookies)
+# lives before a fresh one is built. Reuse skips the consent + crumb bootstrap
+# on every call after the first; the refresh rotates the browser fingerprint
+# and renews the crumb before Yahoo expires it. Same value as fibenchi's.
+SESSION_TTL = 600.0
+
+_T = TypeVar("_T")
+
+
+class YahooThrottled(RuntimeError):
+    """Yahoo's circuit breaker is open, so no request was sent.
+
+    Deliberately not :class:`ChainUnavailable`: that means "this symbol has no
+    options", and validation would turn a temporary IP block into a permanent
+    rejection of a perfectly good underlying.
+    """
+
+
+def _throttled() -> Any:
+    raise YahooThrottled("Yahoo is rate-limiting this IP; request skipped")
+
 
 # Yahoo epochs are seconds UTC.
 def _ts(value) -> datetime | None:
@@ -104,6 +135,67 @@ class YahooOptionProvider(OptionProvider):
     venue = Venue.OCC
     intraday = True
 
+    def __init__(
+        self,
+        throttle: YahooThrottle | None = None,
+        session_ttl: float = SESSION_TTL,
+    ) -> None:
+        self._throttle = throttle or yahoo_throttle
+        self._session_ttl = session_ttl
+        # Held across "point the shared Ticker at these symbols" *and* the
+        # request itself. The Ticker is one mutable object, so a validation
+        # call from the API landing mid-poll would otherwise retarget it under
+        # the chain loop's feet.
+        self._session_lock = threading.Lock()
+        self._cached_ticker: Any | None = None
+        self._session_created_at = 0.0
+
+    def _ticker(self, symbols: list[str]) -> Any:
+        """The shared ``Ticker``, pointed at ``symbols``. Call under the lock."""
+        now = time.monotonic()
+        if self._cached_ticker is None or now - self._session_created_at > self._session_ttl:
+            self._cached_ticker = Ticker(symbols, asynchronous=False, validate=False)
+            self._session_created_at = now
+        else:
+            self._cached_ticker.symbols = symbols
+        return self._cached_ticker
+
+    def _invalidate_session(self) -> None:
+        with self._session_lock:
+            self._cached_ticker = None
+            self._session_created_at = 0.0
+
+    def _call(self, fetch: Callable[[], _T], fallback: Callable[[], _T], *, retries: int = 1) -> _T:
+        """Run ``fetch`` under the throttle and circuit breaker.
+
+        Same policy as fibenchi's ``YahooClient._call``: an open breaker
+        returns ``fallback()`` without touching the network; a crumb rejection
+        retries once on a fresh session, then trips the breaker. Any other
+        exception propagates so a transient error is not mistaken for a block.
+        """
+        if self._throttle.is_blocked():
+            return fallback()
+
+        for attempt in range(retries + 1):
+            self._throttle.wait()
+            try:
+                with self._session_lock:
+                    result = fetch()
+            except CrumbRejected:
+                self._invalidate_session()
+                if attempt < retries:
+                    logger.warning(
+                        "Yahoo crumb rejected, retry %d/%d with a fresh session",
+                        attempt + 1, retries,
+                    )
+                    continue
+                self._throttle.record_invalid_crumb()
+                return fallback()
+            self._throttle.record_success()
+            return result
+
+        return fallback()  # unreachable; quiets the type checker
+
     async def fetch_spot(self, symbol: str) -> dict | None:
         """The underlying's own quote block, without its option chain.
 
@@ -152,9 +244,15 @@ class YahooOptionProvider(OptionProvider):
         # A 10-day window comfortably spans a long weekend plus a holiday,
         # which is what it takes to be sure of finding a prior session.
         start = on - timedelta(days=10)
-        ticker = Ticker([symbol], asynchronous=False, validate=False)
-        frame = ticker.history(start=start.isoformat(), end=(on + timedelta(days=1)).isoformat(),
-                               interval="1d")
+
+        def fetch():
+            frame = self._ticker([symbol]).history(
+                start=start.isoformat(), end=(on + timedelta(days=1)).isoformat(), interval="1d"
+            )
+            check_crumb(frame)
+            return frame
+
+        frame = self._call(fetch, _throttled)
         if not hasattr(frame, "empty") or frame.empty or "close" not in frame:
             return None
 
@@ -174,11 +272,18 @@ class YahooOptionProvider(OptionProvider):
         return None if best is None else best[1]
 
     def _fetch_price(self, symbol: str) -> dict | None:
-        ticker = Ticker([symbol], asynchronous=False, validate=False)
-        price = ticker.price
-        if not isinstance(price, dict):
+        # ``quotes`` is the /v7 quote endpoint, one request however many
+        # symbols; ``price`` fans out one quoteSummary request per symbol. It
+        # also carries bid/ask, which the quoteSummary price module does not.
+        def fetch():
+            data = self._ticker([symbol]).quotes
+            check_crumb(data)
+            return data
+
+        quotes = self._call(fetch, _throttled)
+        if not isinstance(quotes, dict):
             return None
-        block = price.get(symbol) or price.get(symbol.upper())
+        block = quotes.get(symbol) or quotes.get(symbol.upper())
         return block if isinstance(block, dict) else None
 
     async def fetch_chain(self, symbol: str, product: str | None = None) -> RawChain:
@@ -212,8 +317,12 @@ class YahooOptionProvider(OptionProvider):
         return out
 
     def _fetch_raw(self, symbols: list[str]) -> dict:
-        ticker = Ticker(symbols, asynchronous=False, validate=False)
-        data = ticker._get_data("options", {"getAllData": True})
+        def fetch():
+            data = self._ticker(symbols)._get_data("options", {"getAllData": True})
+            check_crumb(data)
+            return data
+
+        data = self._call(fetch, _throttled)
         # A single-symbol request can come back unwrapped.
         if isinstance(data, dict) and "options" in data and len(symbols) == 1:
             return {symbols[0].upper(): data}
