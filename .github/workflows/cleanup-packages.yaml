@@ -1,0 +1,26 @@
+name: Cleanup GHCR packages
+
+on:
+  schedule:
+    # Every Sunday at 03:00 UTC
+    - cron: "0 3 * * 0"
+  workflow_dispatch:
+
+permissions:
+  packages: write
+
+jobs:
+  cleanup-old-sha-tags:
+    name: Delete old SHA-tagged container versions
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        package: [skewer-backend, skewer-frontend]
+    steps:
+      - uses: actions/delete-package-versions@v5
+        with:
+          package-name: ${{ matrix.package }}
+          package-type: container
+          owner: jvanmelckebeke
+          min-versions-to-keep: 5
+          ignore-versions: "^latest$"

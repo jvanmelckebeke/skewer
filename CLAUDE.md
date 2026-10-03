@@ -39,6 +39,16 @@ anywhere. For HMR instead of a rebuild:
 docker compose -f docker-compose.yaml -f docker-compose.dev.yml up frontend
 ```
 
+## CI and production
+
+`.github/workflows/ci.yaml` runs ruff, pytest on SQLite and again on a
+TimescaleDB service, pip-audit, and the frontend's lint and build. A push to
+`main` then pushes `ghcr.io/jvanmelckebeke/skewer-backend` and
+`skewer-frontend`, tagged `latest` and the short sha. `docker-compose.prod.yaml`
+runs those images; the backend's `runtime` stage applies `alembic upgrade head`
+on start, so production needs no manual migration. It reuses the dev stack's
+project name and `pgdata` volume, so stop one before starting the other.
+
 ## Commands
 
 ```bash
