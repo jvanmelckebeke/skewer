@@ -67,8 +67,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Reads the version from packageManager in package.json.
+      # Reads the version from packageManager, so it matches the Dockerfile pin.
       - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: frontend/package.json
 
       - uses: actions/setup-node@v4
         with:
