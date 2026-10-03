@@ -1,6 +1,6 @@
-# Production: the images CI pushes from main, no source mounts, no host port
-# for the backend. Don't run it beside docker-compose.yaml; both claim the
-# skewer project name and the Traefik router.
+# Production: the image CI pushes from main, no source mounts, no host port.
+# Don't run it beside docker-compose.yaml; both claim the skewer project name
+# and the Traefik router.
 #
 #   docker compose -f docker-compose.prod.yaml pull
 #   docker compose -f docker-compose.prod.yaml up -d
@@ -22,9 +22,9 @@ services:
       timeout: 5s
       retries: 5
 
-  # Runs `alembic upgrade head` before uvicorn on every start.
-  backend:
-    image: ghcr.io/jvanmelckebeke/skewer-backend:latest
+  # One container for the SPA and /api. Runs `alembic upgrade head` on start.
+  app:
+    image: ghcr.io/jvanmelckebeke/skewer:latest
     restart: unless-stopped
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-skewer}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-skewer}
@@ -40,13 +40,6 @@ services:
     depends_on:
       db:
         condition: service_healthy
-
-  # nginx proxies /api to the service named `backend`, so keep that name.
-  frontend:
-    image: ghcr.io/jvanmelckebeke/skewer-frontend:latest
-    restart: unless-stopped
-    depends_on:
-      - backend
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.skewer.entrypoints=web"
@@ -54,7 +47,7 @@ services:
       - "traefik.http.routers.skewer-tls.rule=Host(`skewer.desktop.jarivm.be`)"
       - "traefik.http.routers.skewer-tls.entrypoints=websecure"
       - "traefik.http.routers.skewer-tls.tls=true"
-      - "traefik.http.services.skewer.loadbalancer.server.port=80"
+      - "traefik.http.services.skewer.loadbalancer.server.port=8000"
 
 volumes:
   pgdata:
