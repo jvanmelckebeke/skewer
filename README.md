@@ -1,7 +1,9 @@
 # skewer
 
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+
 Self-hosted option-chain collection and analytics. A sibling to
-[fibenchi](../fibenchi) — same architecture, same feel — but where fibenchi
+[fibenchi](https://github.com/jvanmelckebeke/fibenchi) — same architecture, same feel — but where fibenchi
 tracks an asset's *price history*, skewer tracks an underlying's *option
 surface*.
 
@@ -175,3 +177,14 @@ SKEWER_TEST_DATABASE_URL=postgresql+asyncpg://skewer:skewer@db:5432/skewer_test 
   the greeks are far more sensitive to IV than to a few bp of rate.
 - **Dividend yield defaults to 0** and is set per underlying.
 - **No frontend yet.**
+
+## Disclaimer
+
+skewer is not affiliated with, endorsed by or connected to Yahoo, Interactive
+Brokers or Deutsche Börse. It reads publicly reachable endpoints. Whoever runs
+it is responsible for following each data provider's terms of use, and the data
+is for personal research, not for trading decisions or redistribution.
+
+## License
+
+[Apache License 2.0](LICENSE)
