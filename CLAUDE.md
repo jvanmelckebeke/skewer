@@ -46,9 +46,14 @@ TimescaleDB service, pip-audit, and the frontend's lint and build. A push to
 `main` then pushes `ghcr.io/jvanmelckebeke/skewer`, tagged `latest` and the
 short sha, built from the root `Dockerfile`: one image, with the SPA built into
 `static/` and served by FastAPI's fallback route in `main.py`, the way fibenchi
-does it. It applies `alembic upgrade head` on start. `docker-compose.prod.yaml`
-runs it. It reuses the dev stack's project name and `pgdata` volume, so stop one
-before starting the other.
+does it. It applies `alembic upgrade head` on start.
+
+Production runs that image on wstation, at `https://skewer.wstation.jarivm.be`.
+Its compose is in the housekeeping repo, `machines/wstation/finance/skewer/`,
+next to fibenchi's, and so is the runbook for moving the data off the desktop.
+There it reaches ibkr-svc over an `ibkr` network of the same name. With no
+gateway left on the desktop, the dev stack needs that network to exist before
+`docker compose up` (`docker network create ibkr`) and runs without IBKR.
 
 ## Commands
 
