@@ -1,7 +1,11 @@
 import logging
+from pathlib import Path
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI
+from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.staticfiles import StaticFiles
+from starlette.responses import FileResponse
 
 from app.background_tasks import all_tasks
 from app.config import settings
@@ -104,3 +108,21 @@ app.include_router(underlyings.router)
 app.include_router(groups.router)
 app.include_router(chain.router)
 app.include_router(system.router)
+
+# nginx gzipped responses in front of the dev stack; production has no nginx,
+# and a whole chain is thousands of JSON rows.
+app.add_middleware(GZipMiddleware, minimum_size=1024)
+
+# The root Dockerfile builds the SPA into /app/static. In dev that directory
+# doesn't exist and the frontend's own nginx serves it, so the mount is skipped.
+_SPA_DIR = Path(__file__).resolve().parent.parent / "static"
+
+if (_SPA_DIR / "index.html").exists():
+    app.mount("/assets", StaticFiles(directory=_SPA_DIR / "assets"), name="static-assets")
+
+    @app.get("/{path:path}", include_in_schema=False)
+    async def _spa_fallback(path: str):
+        file = _SPA_DIR / path
+        if file.is_file() and file.resolve().is_relative_to(_SPA_DIR.resolve()):
+            return FileResponse(file)
+        return FileResponse(_SPA_DIR / "index.html")

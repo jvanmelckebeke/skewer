@@ -39,6 +39,17 @@ anywhere. For HMR instead of a rebuild:
 docker compose -f docker-compose.yaml -f docker-compose.dev.yml up frontend
 ```
 
+## CI and production
+
+`.github/workflows/ci.yaml` runs ruff, pytest on SQLite and again on a
+TimescaleDB service, pip-audit, and the frontend's lint and build. A push to
+`main` then pushes `ghcr.io/jvanmelckebeke/skewer`, tagged `latest` and the
+short sha, built from the root `Dockerfile`: one image, with the SPA built into
+`static/` and served by FastAPI's fallback route in `main.py`, the way fibenchi
+does it. It applies `alembic upgrade head` on start. `docker-compose.prod.yaml`
+runs it. It reuses the dev stack's project name and `pgdata` volume, so stop one
+before starting the other.
+
 ## Commands
 
 ```bash
@@ -54,8 +65,8 @@ Tests default to SQLite in-memory and skip the ~20 collection tests without
 that env var. Both paths must pass.
 
 `docker-compose.yaml` builds the backend's `dev` stage, which is where pytest,
-ruff and aiosqlite live. A build with no target stops at `runtime` and carries
-none of them, so deploying does not ship the test tooling.
+ruff and aiosqlite live. The production image comes from the root `Dockerfile`
+and carries none of them.
 
 ## Architecture
 
